@@ -1337,9 +1337,14 @@ impl eframe::App for WinRehomeApp {
                                         }
                                     });
 
+                                    let archive_name = loaded
+                                        .path
+                                        .file_name()
+                                        .and_then(|value| value.to_str())
+                                        .unwrap_or("未知归档");
                                     ui.small(format!(
-                                        "创建时间戳：{} | 当前已选恢复范围：{} / {}",
-                                        loaded.manifest.created_at_unix,
+                                        "归档名称：{} | 当前已选恢复范围：{} / {}",
+                                        archive_name,
                                         self.selected_restore_roots.len(),
                                         all_restore_roots.len()
                                     ));
