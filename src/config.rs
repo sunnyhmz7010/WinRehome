@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 pub struct AppConfig {
     pub selected_user_roots: HashSet<String>,
     pub selected_portable_apps: HashSet<String>,
+    pub last_backup_output_dir: Option<String>,
     pub last_archive_path: Option<String>,
     pub last_restore_destination: Option<String>,
     pub restore_user_data: bool,
@@ -22,6 +23,7 @@ impl Default for AppConfig {
         Self {
             selected_user_roots: HashSet::new(),
             selected_portable_apps: HashSet::new(),
+            last_backup_output_dir: None,
             last_archive_path: None,
             last_restore_destination: None,
             restore_user_data: true,
@@ -111,6 +113,7 @@ mod tests {
         let config = AppConfig::default();
         assert!(config.selected_user_roots.is_empty());
         assert!(config.selected_portable_apps.is_empty());
+        assert!(config.last_backup_output_dir.is_none());
         assert!(config.last_archive_path.is_none());
         assert!(config.last_restore_destination.is_none());
         assert!(config.restore_user_data);

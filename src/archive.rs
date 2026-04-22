@@ -173,11 +173,25 @@ pub fn create_backup_archive(
     selected_portable_apps: &HashSet<String>,
 ) -> anyhow::Result<BackupResult> {
     let output_dir = default_output_dir()?;
-    create_backup_archive_at(
+    create_backup_archive_in_dir(
         preview,
         selected_user_roots,
         selected_portable_apps,
         &output_dir,
+    )
+}
+
+pub fn create_backup_archive_in_dir(
+    preview: &crate::plan::BackupPreview,
+    selected_user_roots: &HashSet<String>,
+    selected_portable_apps: &HashSet<String>,
+    output_dir: &Path,
+) -> anyhow::Result<BackupResult> {
+    create_backup_archive_at(
+        preview,
+        selected_user_roots,
+        selected_portable_apps,
+        output_dir,
     )
 }
 

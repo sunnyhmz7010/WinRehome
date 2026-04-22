@@ -23,7 +23,7 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 - `.wrh` archive verification before restore with size and CRC checks
 - Restore to a target directory with category toggles and root-level selection
 - Restore conflict handling with fail-on-conflict by default and explicit skip-existing mode
-- Local config persistence for saved selections and restore targets
+- Local config persistence for saved selections, backup output directory, and restore targets
 - Recent archive discovery for faster reopen and retry flows
 
 ### Deliberately deferred
