@@ -152,11 +152,11 @@ impl eframe::App for WinRehomeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("WinRehome");
-            ui.label("Windows migration backup prototype focused on valuable data only.");
+            ui.label("面向 Windows 的迁移备份工具，只保留真正值得迁移的数据。");
             ui.add_space(8.0);
 
             ui.horizontal(|ui| {
-                if ui.button("Generate Preview").clicked() {
+                if ui.button("生成预览").clicked() {
                     match plan::build_preview() {
                         Ok(preview) => self.load_preview(preview),
                         Err(error) => {
@@ -166,7 +166,7 @@ impl eframe::App for WinRehomeApp {
                     }
                 }
 
-                if ui.button("Clear").clicked() {
+                if ui.button("清空").clicked() {
                     self.clear_preview();
                 }
             });
@@ -176,11 +176,11 @@ impl eframe::App for WinRehomeApp {
             ui.add_space(8.0);
 
             ui.group(|ui| {
-                ui.label(RichText::new("Reliability Guardrails").strong());
-                ui.label("- Installed apps are recorded, not packed.");
-                ui.label("- Portable apps are only candidates until confirmed.");
-                ui.label("- User data uses allow-lists, not 'exclude Program Files'.");
-                ui.label("- Cache, temp, log, and build-output roots are excluded by default.");
+                ui.label(RichText::new("可靠性原则").strong());
+                ui.label("- 已安装软件只记录，不打包程序本体。");
+                ui.label("- 便携软件只是候选项，确认后才会进入归档。");
+                ui.label("- 个人文件采用白名单思路，不靠“排除 Program Files”这种粗规则。");
+                ui.label("- 缓存、临时文件、日志和构建产物默认排除。");
             });
 
             if let Some(error) = &self.last_error {
@@ -196,7 +196,7 @@ impl eframe::App for WinRehomeApp {
                 ui.colored_label(
                     Color32::from_rgb(35, 120, 70),
                     format!(
-                        "Archive created: {} ({} files, {}, stored {})",
+                        "归档已创建：{}（{} 个文件，原始大小 {}，归档大小 {}）",
                         result.archive_path.display(),
                         result.file_count,
                         format_bytes(result.original_bytes),
@@ -210,7 +210,7 @@ impl eframe::App for WinRehomeApp {
                 ui.colored_label(
                     Color32::from_rgb(45, 95, 175),
                     format!(
-                        "Archive restored: {} -> {} ({} files, {}, skipped {})",
+                        "归档已恢复：{} -> {}（{} 个文件，{}，跳过 {} 个已存在文件）",
                         result.archive_path.display(),
                         result.destination_root.display(),
                         result.restored_files,
@@ -225,7 +225,7 @@ impl eframe::App for WinRehomeApp {
                 ui.colored_label(
                     Color32::from_rgb(110, 85, 190),
                     format!(
-                        "Archive verified: {} ({} files, {})",
+                        "归档校验完成：{}（{} 个文件，{}）",
                         result.archive_path.display(),
                         result.verified_files,
                         format_bytes(result.verified_bytes)
@@ -237,18 +237,16 @@ impl eframe::App for WinRehomeApp {
             ui.separator();
             ui.add_space(10.0);
             ui.group(|ui| {
-                ui.label(RichText::new("Archive Restore").strong());
+                ui.label(RichText::new("归档恢复").strong());
                 ui.horizontal(|ui| {
-                    if ui.button("Load Latest Archive").clicked() {
+                    if ui.button("加载最新归档").clicked() {
                         match archive::find_latest_archive() {
                             Ok(Some(path)) => self.load_archive_from_path(path),
                             Ok(None) => {
                                 self.loaded_archive = None;
                                 self.last_restore = None;
-                                self.last_error = Some(
-                                    "No .wrh archive was found in the default backup folder."
-                                        .to_string(),
-                                );
+                                self.last_error =
+                                    Some("默认备份目录中没有找到 .wrh 归档。".to_string());
                             }
                             Err(error) => {
                                 self.loaded_archive = None;
@@ -258,9 +256,9 @@ impl eframe::App for WinRehomeApp {
                         }
                     }
 
-                    ui.label("Archive path");
+                    ui.label("归档路径");
                     ui.text_edit_singleline(&mut self.archive_path_input);
-                    if ui.button("Load Archive").clicked() {
+                    if ui.button("加载归档").clicked() {
                         let path = PathBuf::from(self.archive_path_input.trim());
                         self.load_archive_from_path(path);
                     }
@@ -278,60 +276,60 @@ impl eframe::App for WinRehomeApp {
 
                 if let Some(loaded) = self.loaded_archive.clone() {
                     ui.add_space(8.0);
-                    ui.label(format!("Loaded archive: {}", loaded.path.display()));
+                    ui.label(format!("当前归档：{}", loaded.path.display()));
                     ui.label(format!(
-                        "Created: {} | Files: {} | Original: {} | Stored: {}",
+                        "创建时间：{} | 文件数：{} | 原始大小：{} | 归档大小：{}",
                         loaded.manifest.created_at_unix,
                         loaded.manifest.files.len(),
                         format_bytes(loaded.manifest.original_bytes),
                         format_bytes(loaded.manifest.stored_bytes)
                     ));
                     ui.label(format!(
-                        "Installed app records: {} | User roots: {} | Portable apps: {}",
+                        "已安装软件记录：{} | 用户目录：{} | 便携软件：{}",
                         loaded.manifest.installed_apps.len(),
                         loaded.manifest.selected_user_roots.len(),
                         loaded.manifest.selected_portable_apps.len()
                     ));
                     ui.horizontal(|ui| {
                         if ui
-                            .checkbox(&mut self.restore_user_data, "Restore user data")
+                            .checkbox(&mut self.restore_user_data, "恢复个人文件")
                             .changed()
                         {
                             let _ = self.persist_config();
                         }
                         if ui
-                            .checkbox(&mut self.restore_portable_apps, "Restore portable apps")
+                            .checkbox(&mut self.restore_portable_apps, "恢复便携软件")
                             .changed()
                         {
                             let _ = self.persist_config();
                         }
                         if ui
-                            .checkbox(&mut self.skip_existing_restore_files, "Skip existing files")
+                            .checkbox(&mut self.skip_existing_restore_files, "跳过已存在文件")
                             .changed()
                         {
                             let _ = self.persist_config();
                         }
                     });
-                    ui.collapsing("Archive contents", |ui| {
+                    ui.collapsing("归档内容", |ui| {
                         let all_restore_roots = collect_restore_roots(&loaded);
                         ui.horizontal(|ui| {
                             ui.small(format!(
-                                "Selected roots: {} / {}",
+                                "已选根目录：{} / {}",
                                 self.selected_restore_roots.len(),
                                 all_restore_roots.len()
                             ));
-                            if ui.button("Select All").clicked() {
+                            if ui.button("全部选择").clicked() {
                                 self.selected_restore_roots = all_restore_roots.clone();
                                 let _ = self.persist_config();
                             }
-                            if ui.button("Clear All").clicked() {
+                            if ui.button("全部清空").clicked() {
                                 self.selected_restore_roots.clear();
                                 let _ = self.persist_config();
                             }
                         });
                         ui.add_space(4.0);
                         if !loaded.manifest.selected_user_roots.is_empty() {
-                            ui.label(RichText::new("User roots").strong());
+                            ui.label(RichText::new("个人文件目录").strong());
                             for root in &loaded.manifest.selected_user_roots {
                                 let key = user_restore_root_key(root);
                                 let mut selected = self.selected_restore_roots.contains(&key);
@@ -343,12 +341,12 @@ impl eframe::App for WinRehomeApp {
                                     }
                                     let _ = self.persist_config();
                                 }
-                                ui.small(format!("Path: {}", root.path));
+                                ui.small(format!("路径：{}", root.path));
                             }
                             ui.add_space(6.0);
                         }
                         if !loaded.manifest.selected_portable_apps.is_empty() {
-                            ui.label(RichText::new("Portable apps").strong());
+                            ui.label(RichText::new("便携软件").strong());
                             for app in &loaded.manifest.selected_portable_apps {
                                 let key = portable_restore_root_key(app);
                                 let mut selected = self.selected_restore_roots.contains(&key);
@@ -360,12 +358,12 @@ impl eframe::App for WinRehomeApp {
                                     }
                                     let _ = self.persist_config();
                                 }
-                                ui.small(format!("Path: {}", app.root_path));
+                                ui.small(format!("路径：{}", app.root_path));
                             }
                         }
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("Verify Archive").clicked() {
+                        if ui.button("校验归档").clicked() {
                             match archive::verify_archive(&loaded.path) {
                                 Ok(result) => {
                                     self.last_verification = Some(result);
@@ -377,14 +375,14 @@ impl eframe::App for WinRehomeApp {
                                 }
                             }
                         }
-                        ui.label("Restore to");
+                        ui.label("恢复到");
                         if ui
                             .text_edit_singleline(&mut self.restore_destination_input)
                             .changed()
                         {
                             let _ = self.persist_config();
                         }
-                        if ui.button("Use Default Restore Dir").clicked() {
+                        if ui.button("使用默认恢复目录").clicked() {
                             if let Ok(path) = archive::default_restore_dir(&loaded.path) {
                                 self.restore_destination_input = path.display().to_string();
                                 let _ = self.persist_config();
@@ -399,7 +397,7 @@ impl eframe::App for WinRehomeApp {
                         let can_restore = !self.restore_destination_input.trim().is_empty()
                             && !effective_restore_roots.is_empty();
                         if ui
-                            .add_enabled(can_restore, egui::Button::new("Restore Archive"))
+                            .add_enabled(can_restore, egui::Button::new("开始恢复"))
                             .clicked()
                         {
                             let destination = PathBuf::from(self.restore_destination_input.trim());
@@ -443,14 +441,12 @@ impl eframe::App for WinRehomeApp {
                     )
                     .len();
                     if self.restore_destination_input.trim().is_empty() {
-                        ui.small("Choose a restore destination before starting restore.");
+                        ui.small("请先选择恢复目标目录。");
                     } else if effective_restore_count == 0 {
-                        ui.small(
-                            "Select at least one enabled restore root before starting restore.",
-                        );
+                        ui.small("请至少选择一个已启用的恢复根目录。");
                     } else {
                         ui.small(format!(
-                            "Ready to restore {} selected root(s).",
+                            "已准备恢复 {} 个选中的根目录。",
                             effective_restore_count
                         ));
                     }
@@ -465,39 +461,30 @@ impl eframe::App for WinRehomeApp {
                 ui.separator();
                 ui.add_space(10.0);
 
-                ui.heading("Preview");
+                ui.heading("扫描预览");
+                ui.label(format!("已安装软件记录：{}", preview.installed_apps.len()));
                 ui.label(format!(
-                    "Installed apps recorded: {}",
-                    preview.installed_apps.len()
-                ));
-                ui.label(format!(
-                    "Portable candidates found: {}",
+                    "便携软件候选：{}",
                     preview.portable_candidates.len()
                 ));
-                ui.label(format!(
-                    "High-value user roots found: {}",
-                    preview.user_data_roots.len()
-                ));
-                ui.label(format!(
-                    "Global exclusion rules: {}",
-                    preview.exclusion_rules.len()
-                ));
+                ui.label(format!("高价值用户目录：{}", preview.user_data_roots.len()));
+                ui.label(format!("全局排除规则：{}", preview.exclusion_rules.len()));
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Use Recommended").clicked() {
+                    if ui.button("使用推荐选择").clicked() {
                         self.selected_user_roots = preview.default_user_root_keys();
                         self.selected_portable_apps = preview.default_portable_keys();
                         let _ = self.persist_config();
                     }
 
-                    if ui.button("Clear Selections").clicked() {
+                    if ui.button("清空选择").clicked() {
                         self.selected_user_roots.clear();
                         self.selected_portable_apps.clear();
                         let _ = self.persist_config();
                     }
 
-                    if ui.button("Create Backup Archive").clicked() {
+                    if ui.button("创建备份归档").clicked() {
                         match archive::create_backup_archive(
                             &preview,
                             &self.selected_user_roots,
@@ -523,35 +510,32 @@ impl eframe::App for WinRehomeApp {
 
                 ui.add_space(10.0);
                 ui.group(|ui| {
-                    ui.label(RichText::new("Selected Backup Plan").strong());
-                    ui.label(format!("User roots kept: {}", summary.selected_user_roots));
+                    ui.label(RichText::new("当前备份计划").strong());
+                    ui.label(format!("保留的用户目录：{}", summary.selected_user_roots));
                     ui.label(format!(
-                        "Portable apps kept: {}",
+                        "保留的便携软件：{}",
                         summary.selected_portable_apps
                     ));
-                    ui.label(format!("Estimated files: {}", summary.total_files));
-                    ui.label(format!(
-                        "Estimated size: {}",
-                        format_bytes(summary.total_bytes)
-                    ));
+                    ui.label(format!("预计文件数：{}", summary.total_files));
+                    ui.label(format!("预计大小：{}", format_bytes(summary.total_bytes)));
                 });
 
                 ui.add_space(10.0);
                 ui.columns(3, |columns| {
                     columns[0].group(|ui| {
-                        ui.label(RichText::new("Installed Apps").strong());
+                        ui.label(RichText::new("已安装软件").strong());
                         for app in preview.installed_apps.iter().take(12) {
-                            ui.label(format!("{} [{}]", app.display_name, app.source));
+                            ui.label(format!("{} [来源: {}]", app.display_name, app.source));
                             if let Some(path) = &app.install_location {
-                                ui.small(format!("Location: {}", path.display()));
+                                ui.small(format!("安装位置：{}", path.display()));
                             }
-                            ui.small(format!("Key: {}", app.uninstall_key));
+                            ui.small(format!("注册表键：{}", app.uninstall_key));
                             ui.add_space(4.0);
                         }
                     });
 
                     columns[1].group(|ui| {
-                        ui.label(RichText::new("Portable Candidates").strong());
+                        ui.label(RichText::new("便携软件候选").strong());
                         egui::ScrollArea::vertical()
                             .max_height(420.0)
                             .show(ui, |ui| {
@@ -566,23 +550,20 @@ impl eframe::App for WinRehomeApp {
                                         }
                                         let _ = self.persist_config();
                                     }
-                                    ui.small(format!("Confidence: {}", item.confidence_label()));
-                                    ui.small(format!("Root: {}", item.root_path.display()));
+                                    ui.small(format!("置信度：{}", item.confidence_label()));
+                                    ui.small(format!("根目录：{}", item.root_path.display()));
+                                    ui.small(format!("主程序：{}", item.main_executable.display()));
                                     ui.small(format!(
-                                        "Main exe: {}",
-                                        item.main_executable.display()
-                                    ));
-                                    ui.small(format!(
-                                        "Estimated size: {} across {} files",
+                                        "预计大小：{}，共 {} 个文件",
                                         format_bytes(item.stats.total_bytes),
                                         item.stats.file_count
                                     ));
                                     ui.small(format!(
-                                        "Default: {}",
+                                        "默认状态：{}",
                                         if item.default_selected {
-                                            "selected"
+                                            "已选择"
                                         } else {
-                                            "not selected"
+                                            "未选择"
                                         }
                                     ));
                                     for reason in item.reasons.iter().take(3) {
@@ -594,7 +575,7 @@ impl eframe::App for WinRehomeApp {
                     });
 
                     columns[2].group(|ui| {
-                        ui.label(RichText::new("User Data Roots").strong());
+                        ui.label(RichText::new("用户数据目录").strong());
                         egui::ScrollArea::vertical()
                             .max_height(300.0)
                             .show(ui, |ui| {
@@ -609,20 +590,20 @@ impl eframe::App for WinRehomeApp {
                                         }
                                         let _ = self.persist_config();
                                     }
-                                    ui.small(format!("Category: {}", root.category));
-                                    ui.small(format!("Path: {}", root.path.display()));
+                                    ui.small(format!("分类：{}", root.category));
+                                    ui.small(format!("路径：{}", root.path.display()));
                                     ui.small(root.reason);
                                     ui.small(format!(
-                                        "Estimated size: {} across {} files",
+                                        "预计大小：{}，共 {} 个文件",
                                         format_bytes(root.stats.total_bytes),
                                         root.stats.file_count
                                     ));
                                     ui.small(format!(
-                                        "Default: {}",
+                                        "默认状态：{}",
                                         if root.default_selected {
-                                            "selected"
+                                            "已选择"
                                         } else {
-                                            "not selected"
+                                            "未选择"
                                         }
                                     ));
                                     ui.add_space(6.0);
@@ -630,7 +611,7 @@ impl eframe::App for WinRehomeApp {
                             });
 
                         ui.add_space(10.0);
-                        ui.label(RichText::new("Exclusions").strong());
+                        ui.label(RichText::new("排除规则").strong());
                         for rule in &preview.exclusion_rules {
                             ui.small(format!("{}: {}", rule.label, rule.pattern));
                         }
