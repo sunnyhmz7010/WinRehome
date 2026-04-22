@@ -1,25 +1,32 @@
 # WinRehome
 
-Windows-only migration backup prototype focused on preserving valuable user data while minimizing archive size.
+WinRehome 是一个面向 Windows 的迁移备份工具原型，目标是在尽可能节省备份空间的前提下，保留真正有迁移价值的个人数据。
 
-## Product direction
+## 项目定位
 
-- Installed applications are recorded from Windows uninstall metadata instead of backing up binaries.
-- Portable applications are discovered as candidates and backed up as part of a single archive, not one zip per app.
-- User data is selected through allow-lists and migration-value heuristics, not by blindly excluding `Program Files`.
-- Cache, temp, logs, and build outputs are excluded by default.
+- 已安装软件只记录清单，不备份程序本体。
+- 便携软件作为候选项识别，并和个人文件一起打进单一归档文件，而不是一个软件一个压缩包。
+- 个人文件通过白名单目录和迁移价值规则筛选，不采用“只要不在 `Program Files` 就全备份”的粗放方式。
+- 默认排除缓存、临时文件、日志、构建产物等可重建内容。
 
-## First-build stack
+## 当前技术栈
 
 - Rust 1.94+
-- `eframe/egui` for a lightweight native desktop shell without WebView2
-- Windows registry scanning via `winreg`
-- File system discovery via `walkdir`
+- `eframe/egui`：轻量原生桌面 UI，不依赖 WebView2
+- `winreg`：扫描 Windows 注册表中的已安装软件信息
+- `walkdir`：文件系统遍历与候选目录发现
 
-## Planned milestones
+## 当前已实现
 
-1. Preview scan and classification rules
-2. Reviewable backup plan with user overrides
-3. Single-file archive format with metadata index and chunked compression
-4. Restore workflow for personal files and portable applications
-5. Incremental scan using NTFS change tracking
+1. 已安装软件注册表扫描与清单预览
+2. 高价值用户目录收集
+3. 便携软件候选识别与置信度预览
+4. 桌面端预览界面
+
+## 后续里程碑
+
+1. 可审查、可调整的备份计划
+2. 单文件归档格式与元数据索引
+3. 压缩、校验与恢复流程
+4. 增量扫描与变更跟踪
+5. 更完整的迁移向导体验
