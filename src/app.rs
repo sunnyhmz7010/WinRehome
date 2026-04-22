@@ -251,12 +251,14 @@ impl eframe::App for WinRehomeApp {
                             Ok(Some(path)) => self.load_archive_from_path(path),
                             Ok(None) => {
                                 self.loaded_archive = None;
+                                self.last_verification = None;
                                 self.last_restore = None;
                                 self.last_error =
                                     Some("默认备份目录中没有找到 .wrh 归档。".to_string());
                             }
                             Err(error) => {
                                 self.loaded_archive = None;
+                                self.last_verification = None;
                                 self.last_restore = None;
                                 self.last_error = Some(error.to_string());
                             }
@@ -264,7 +266,12 @@ impl eframe::App for WinRehomeApp {
                     }
 
                     ui.label("归档路径");
-                    ui.text_edit_singleline(&mut self.archive_path_input);
+                    if ui
+                        .text_edit_singleline(&mut self.archive_path_input)
+                        .changed()
+                    {
+                        let _ = self.persist_config();
+                    }
                     if ui.button("加载归档").clicked() {
                         let path = PathBuf::from(self.archive_path_input.trim());
                         self.load_archive_from_path(path);
@@ -272,7 +279,7 @@ impl eframe::App for WinRehomeApp {
                 });
 
                 if !self.recent_archives.is_empty() {
-                    ui.collapsing("Recent archives", |ui| {
+                    ui.collapsing("最近归档", |ui| {
                         for path in self.recent_archives.clone() {
                             if ui.button(path.display().to_string()).clicked() {
                                 self.load_archive_from_path(path);
