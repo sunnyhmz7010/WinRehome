@@ -9,6 +9,15 @@ struct LoadedArchive {
     manifest: archive::ArchiveManifest,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RestorePreviewSummary {
+    selected_root_count: usize,
+    selected_user_root_count: usize,
+    selected_portable_app_count: usize,
+    selected_file_count: usize,
+    selected_bytes: u64,
+}
+
 #[derive(Default)]
 pub struct WinRehomeApp {
     preview: Option<plan::BackupPreview>,
@@ -304,6 +313,12 @@ impl eframe::App for WinRehomeApp {
                         loaded.manifest.selected_user_roots.len(),
                         loaded.manifest.selected_portable_apps.len()
                     ));
+                    let effective_restore_roots = effective_restore_roots(
+                        &loaded,
+                        self.restore_user_data,
+                        self.restore_portable_apps,
+                        &self.selected_restore_roots,
+                    );
                     ui.horizontal(|ui| {
                         if ui
                             .checkbox(&mut self.restore_user_data, "恢复个人文件")
@@ -376,6 +391,34 @@ impl eframe::App for WinRehomeApp {
                             }
                         }
                     });
+                    let restore_summary =
+                        build_restore_preview_summary(&loaded, &effective_restore_roots);
+                    ui.group(|ui| {
+                        ui.label(RichText::new("恢复摘要").strong());
+                        ui.label(format!(
+                            "已选个人目录：{} | 已选便携软件：{}",
+                            restore_summary.selected_user_root_count,
+                            restore_summary.selected_portable_app_count
+                        ));
+                        ui.label(format!(
+                            "预计恢复文件：{} | 预计恢复大小：{}",
+                            restore_summary.selected_file_count,
+                            format_bytes(restore_summary.selected_bytes)
+                        ));
+                        if self.restore_destination_input.trim().is_empty() {
+                            ui.small("目标目录尚未填写。");
+                        } else {
+                            ui.small(format!(
+                                "目标目录：{}",
+                                self.restore_destination_input.trim()
+                            ));
+                        }
+                        if self.skip_existing_restore_files {
+                            ui.small("已启用“跳过已存在文件”，恢复时会保留目标目录里的同名文件。");
+                        } else {
+                            ui.small("默认遇到同名文件会停止恢复，不会静默覆盖。");
+                        }
+                    });
                     ui.horizontal(|ui| {
                         if ui.button("校验归档").clicked() {
                             match archive::verify_archive(&loaded.path) {
@@ -402,14 +445,8 @@ impl eframe::App for WinRehomeApp {
                                 let _ = self.persist_config();
                             }
                         }
-                        let effective_restore_roots = effective_restore_roots(
-                            &loaded,
-                            self.restore_user_data,
-                            self.restore_portable_apps,
-                            &self.selected_restore_roots,
-                        );
                         let can_restore = !self.restore_destination_input.trim().is_empty()
-                            && !effective_restore_roots.is_empty();
+                            && restore_summary.selected_file_count > 0;
                         if ui
                             .add_enabled(can_restore, egui::Button::new("开始恢复"))
                             .clicked()
@@ -447,21 +484,15 @@ impl eframe::App for WinRehomeApp {
                             }
                         }
                     });
-                    let effective_restore_count = effective_restore_roots(
-                        &loaded,
-                        self.restore_user_data,
-                        self.restore_portable_apps,
-                        &self.selected_restore_roots,
-                    )
-                    .len();
                     if self.restore_destination_input.trim().is_empty() {
                         ui.small("请先选择恢复目标目录。");
-                    } else if effective_restore_count == 0 {
+                    } else if restore_summary.selected_file_count == 0 {
                         ui.small("请至少选择一个已启用的恢复根目录。");
                     } else {
                         ui.small(format!(
-                            "已准备恢复 {} 个选中的根目录。",
-                            effective_restore_count
+                            "已准备恢复 {} 个根目录中的 {} 个文件。",
+                            restore_summary.selected_root_count,
+                            restore_summary.selected_file_count
                         ));
                     }
                 }
@@ -719,4 +750,126 @@ fn effective_restore_roots(
         })
         .cloned()
         .collect()
+}
+
+fn build_restore_preview_summary(
+    loaded: &LoadedArchive,
+    effective_roots: &HashSet<String>,
+) -> RestorePreviewSummary {
+    let mut summary = RestorePreviewSummary::default();
+
+    for root in &loaded.manifest.selected_user_roots {
+        if effective_roots.contains(&user_restore_root_key(root)) {
+            summary.selected_user_root_count += 1;
+        }
+    }
+    for app in &loaded.manifest.selected_portable_apps {
+        if effective_roots.contains(&portable_restore_root_key(app)) {
+            summary.selected_portable_app_count += 1;
+        }
+    }
+
+    summary.selected_root_count =
+        summary.selected_user_root_count + summary.selected_portable_app_count;
+
+    for entry in &loaded.manifest.files {
+        if effective_roots.iter().any(|root| {
+            entry.archive_path == *root || entry.archive_path.starts_with(&format!("{root}/"))
+        }) {
+            summary.selected_file_count += 1;
+            summary.selected_bytes += entry.original_size;
+        }
+    }
+
+    summary
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        LoadedArchive, build_restore_preview_summary, effective_restore_roots,
+        portable_restore_root_key, user_restore_root_key,
+    };
+    use crate::archive::{ArchiveManifest, ArchivedFileEntry, ManifestPortableApp, ManifestRoot};
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    fn sample_loaded_archive() -> LoadedArchive {
+        LoadedArchive {
+            path: PathBuf::from("C:\\Backups\\sample.wrh"),
+            manifest: ArchiveManifest {
+                format_version: 1,
+                created_at_unix: 1,
+                app_name: "WinRehome".to_string(),
+                app_version: "0.1.0".to_string(),
+                installed_apps: vec![],
+                selected_user_roots: vec![ManifestRoot {
+                    category: "Personal Files".to_string(),
+                    label: "Documents".to_string(),
+                    path: "C:\\Users\\Sunny\\Documents".to_string(),
+                    reason: "Test".to_string(),
+                }],
+                selected_portable_apps: vec![ManifestPortableApp {
+                    display_name: "PortableTool".to_string(),
+                    root_path: "D:\\PortableTool".to_string(),
+                    main_executable: "D:\\PortableTool\\Tool.exe".to_string(),
+                    confidence: "high".to_string(),
+                    reasons: vec!["portable".to_string()],
+                }],
+                files: vec![
+                    ArchivedFileEntry {
+                        source_path: "a".to_string(),
+                        archive_path: "user/Personal Files/Documents/note.txt".to_string(),
+                        entry_kind: "user_data".to_string(),
+                        offset: 0,
+                        stored_size: 1,
+                        original_size: 10,
+                        crc32: 1,
+                    },
+                    ArchivedFileEntry {
+                        source_path: "b".to_string(),
+                        archive_path: "portable/PortableTool/Tool.exe".to_string(),
+                        entry_kind: "portable_app".to_string(),
+                        offset: 1,
+                        stored_size: 1,
+                        original_size: 20,
+                        crc32: 2,
+                    },
+                ],
+                original_bytes: 30,
+                stored_bytes: 25,
+            },
+        }
+    }
+
+    #[test]
+    fn restore_preview_summary_counts_only_selected_roots() {
+        let loaded = sample_loaded_archive();
+        let roots = HashSet::from([user_restore_root_key(
+            &loaded.manifest.selected_user_roots[0],
+        )]);
+
+        let summary = build_restore_preview_summary(&loaded, &roots);
+
+        assert_eq!(summary.selected_root_count, 1);
+        assert_eq!(summary.selected_user_root_count, 1);
+        assert_eq!(summary.selected_portable_app_count, 0);
+        assert_eq!(summary.selected_file_count, 1);
+        assert_eq!(summary.selected_bytes, 10);
+    }
+
+    #[test]
+    fn effective_restore_roots_respects_category_toggles() {
+        let loaded = sample_loaded_archive();
+        let selected_roots = HashSet::from([
+            user_restore_root_key(&loaded.manifest.selected_user_roots[0]),
+            portable_restore_root_key(&loaded.manifest.selected_portable_apps[0]),
+        ]);
+
+        let effective = effective_restore_roots(&loaded, false, true, &selected_roots);
+
+        assert_eq!(effective.len(), 1);
+        assert!(effective.contains("portable/PortableTool"));
+        assert!(!effective.contains("user/Personal Files/Documents"));
+    }
 }

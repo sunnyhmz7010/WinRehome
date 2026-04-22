@@ -109,6 +109,7 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - The current archive format is a single `.wrh` file with a manifest footer; keep format updates explicit and reviewable.
 - Restore logic must continue to verify stored size and CRC before reporting success.
 - Restore UX may offer category-level restore, but safety checks must stay the same regardless of scope.
+- Restore UX should summarize the selected restore scope before execution, including at least selected roots and estimated file payload.
 - Empty explicit restore-root selection means restore nothing; only the plain full-restore entrypoint should restore all manifest roots by default.
 - Skip-existing restore behavior must remain opt-in and must report how many files were skipped.
 - Restore must reject archive entry paths that attempt to escape the chosen destination root.
