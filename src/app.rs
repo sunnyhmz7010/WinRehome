@@ -1,4 +1,4 @@
-use crate::plan;
+use crate::{archive, plan};
 use eframe::egui::{self, Color32, RichText};
 use std::collections::HashSet;
 
@@ -7,6 +7,7 @@ pub struct WinRehomeApp {
     preview: Option<plan::BackupPreview>,
     selected_user_roots: HashSet<String>,
     selected_portable_apps: HashSet<String>,
+    last_archive: Option<archive::BackupResult>,
     last_error: Option<String>,
 }
 
@@ -22,6 +23,7 @@ impl WinRehomeApp {
         self.preview = None;
         self.selected_user_roots.clear();
         self.selected_portable_apps.clear();
+        self.last_archive = None;
         self.last_error = None;
     }
 }
@@ -38,6 +40,7 @@ impl eframe::App for WinRehomeApp {
                     match plan::build_preview() {
                         Ok(preview) => self.load_preview(preview),
                         Err(error) => {
+                            self.last_archive = None;
                             self.last_error = Some(error.to_string());
                         }
                     }
@@ -64,7 +67,21 @@ impl eframe::App for WinRehomeApp {
                 ui.add_space(10.0);
                 ui.colored_label(
                     Color32::from_rgb(200, 40, 40),
-                    format!("Preview generation failed: {error}"),
+                    format!("Operation failed: {error}"),
+                );
+            }
+
+            if let Some(result) = &self.last_archive {
+                ui.add_space(10.0);
+                ui.colored_label(
+                    Color32::from_rgb(35, 120, 70),
+                    format!(
+                        "Archive created: {} ({} files, {}, stored {})",
+                        result.archive_path.display(),
+                        result.file_count,
+                        format_bytes(result.original_bytes),
+                        format_bytes(result.stored_bytes)
+                    ),
                 );
             }
 
@@ -104,6 +121,23 @@ impl eframe::App for WinRehomeApp {
                     if ui.button("Clear Selections").clicked() {
                         self.selected_user_roots.clear();
                         self.selected_portable_apps.clear();
+                    }
+
+                    if ui.button("Create Backup Archive").clicked() {
+                        match archive::create_backup_archive(
+                            preview,
+                            &self.selected_user_roots,
+                            &self.selected_portable_apps,
+                        ) {
+                            Ok(result) => {
+                                self.last_archive = Some(result);
+                                self.last_error = None;
+                            }
+                            Err(error) => {
+                                self.last_archive = None;
+                                self.last_error = Some(error.to_string());
+                            }
+                        }
                     }
                 });
 

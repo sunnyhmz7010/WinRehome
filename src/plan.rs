@@ -76,7 +76,7 @@ impl BackupPreview {
 pub fn build_preview() -> anyhow::Result<BackupPreview> {
     let exclusion_rules = default_exclusion_rules();
     let installed_apps = scan_installed_apps()?;
-    let user_data_roots = collect_user_data_roots(&exclusion_rules)?;
+    let user_data_roots = collect_user_data_roots()?;
     let portable_candidates = scan_portable_candidates(&installed_apps)?;
 
     Ok(BackupPreview {
@@ -148,7 +148,7 @@ fn scan_installed_apps() -> anyhow::Result<Vec<InstalledAppRecord>> {
     Ok(records)
 }
 
-fn collect_user_data_roots(exclusion_rules: &[ExclusionRule]) -> anyhow::Result<Vec<UserDataRoot>> {
+fn collect_user_data_roots() -> anyhow::Result<Vec<UserDataRoot>> {
     let profile = env::var_os("USERPROFILE").context("USERPROFILE is not available")?;
     let profile = PathBuf::from(profile);
     let roaming = profile.join("AppData\\Roaming");
@@ -251,7 +251,7 @@ fn collect_user_data_roots(exclusion_rules: &[ExclusionRule]) -> anyhow::Result<
     let mut roots = Vec::new();
     for (category, label, path, reason, default_selected) in candidates {
         if path.exists() {
-            let stats = estimate_path_stats(&path, exclusion_rules);
+            let stats = estimate_path_stats(&path);
             roots.push(UserDataRoot {
                 category,
                 label,
@@ -364,22 +364,28 @@ fn is_installed_location(path: &Path, installed_locations: &[PathBuf]) -> bool {
 }
 
 fn is_known_noise(path: &Path) -> bool {
-    let lower = path.display().to_string().to_lowercase();
-    lower.contains("\\appdata\\local\\temp")
-        || lower.contains("\\cache\\")
-        || lower.contains("\\code cache\\")
-        || lower.contains("\\gpucache\\")
-        || lower.contains("\\logs\\")
-        || has_component(path, "temp")
-        || has_component(path, "tmp")
-        || has_component(path, "cache")
-        || has_component(path, "logs")
-        || has_component(path, "node_modules")
-        || has_component(path, "target")
-        || has_component(path, "bin")
-        || has_component(path, "obj")
-        || has_component(path, "dist")
-        || has_component(path, "build")
+    let leaf = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    matches!(
+        leaf.as_str(),
+        "temp"
+            | "tmp"
+            | "cache"
+            | "code cache"
+            | "gpucache"
+            | "logs"
+            | "log"
+            | "node_modules"
+            | "target"
+            | "bin"
+            | "obj"
+            | "dist"
+            | "build"
+    )
 }
 
 fn evaluate_portable_directory(
@@ -444,7 +450,7 @@ fn evaluate_portable_directory(
         return None;
     }
 
-    let stats = estimate_path_stats(path, &default_exclusion_rules());
+    let stats = estimate_path_stats(path);
     let default_selected = matches!(confidence, PortableConfidence::High);
 
     Some(PortableAppCandidate {
@@ -475,7 +481,7 @@ fn score_executable_name(path: &Path) -> usize {
     score + file_name.len()
 }
 
-fn estimate_path_stats(path: &Path, exclusion_rules: &[ExclusionRule]) -> PathStats {
+fn estimate_path_stats(path: &Path) -> PathStats {
     if !path.exists() {
         return PathStats::default();
     }
@@ -497,7 +503,7 @@ fn estimate_path_stats(path: &Path, exclusion_rules: &[ExclusionRule]) -> PathSt
             Err(_) => continue,
         };
 
-        if entry.depth() > 0 && should_exclude_path(entry.path(), exclusion_rules) {
+        if entry.depth() > 0 && should_exclude_path(entry.path()) {
             if entry.file_type().is_dir() {
                 iterator.skip_current_dir();
             }
@@ -518,18 +524,8 @@ fn estimate_path_stats(path: &Path, exclusion_rules: &[ExclusionRule]) -> PathSt
     stats
 }
 
-fn should_exclude_path(path: &Path, _exclusion_rules: &[ExclusionRule]) -> bool {
+pub fn should_exclude_path(path: &Path) -> bool {
     is_known_noise(path)
-}
-
-fn has_component(path: &Path, expected: &str) -> bool {
-    path.components().any(|component| {
-        component
-            .as_os_str()
-            .to_str()
-            .map(|value| value.eq_ignore_ascii_case(expected))
-            .unwrap_or(false)
-    })
 }
 
 fn is_system_install_path(path: &Path) -> bool {
@@ -546,9 +542,7 @@ pub fn path_key(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        evaluate_portable_directory, has_component, is_known_noise, is_system_install_path,
-    };
+    use super::{evaluate_portable_directory, is_known_noise, is_system_install_path};
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -556,10 +550,10 @@ mod tests {
     #[test]
     fn treats_common_noise_directories_as_excluded() {
         assert!(is_known_noise(Path::new(
-            "C:\\Users\\Sunny\\AppData\\Local\\Temp\\foo.txt"
+            "C:\\Users\\Sunny\\AppData\\Local\\Temp"
         )));
         assert!(is_known_noise(Path::new(
-            "D:\\PortableApps\\Tool\\node_modules\\left-pad\\index.js"
+            "D:\\PortableApps\\Tool\\node_modules"
         )));
         assert!(!is_known_noise(Path::new(
             "D:\\PortableApps\\BinaryNinja\\plugins"
@@ -602,8 +596,8 @@ mod tests {
     }
 
     #[test]
-    fn component_matching_uses_exact_segments() {
-        assert!(has_component(Path::new("D:\\foo\\bin\\app.exe"), "bin"));
-        assert!(!has_component(Path::new("D:\\foo\\binary\\app.exe"), "bin"));
+    fn noise_matching_uses_leaf_name_only() {
+        assert!(is_known_noise(Path::new("D:\\foo\\bin")));
+        assert!(!is_known_noise(Path::new("D:\\foo\\binary\\app.exe")));
     }
 }

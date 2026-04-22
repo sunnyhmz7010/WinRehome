@@ -19,11 +19,11 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 - High-value user data roots with default recommendations
 - Portable application candidate discovery from curated search roots
 - Desktop preview UI with reviewable backup-plan estimates
+- Single-file `.wrh` archive writing with manifest validation
 
 ### Deliberately deferred
 
 - Full-disk intelligent scanning
-- Custom archive writer
 - Incremental block deduplication
 - Restore UI
 - Shadow copy support for locked files
@@ -31,9 +31,9 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 ## Archive design target
 
 - One archive file per snapshot
-- Metadata header plus append-only chunk table
-- Strong checksums per chunk
-- Zstd compression as default
+- `WRH1` header plus manifest footer
+- Per-file metadata with source path, archive path, offsets, sizes, and CRC32
+- Deflate compression per file in the current prototype
 - Optional future content-defined chunking for deduplication
 
 ## Why `eframe/egui` first
