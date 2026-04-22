@@ -602,6 +602,13 @@ pub fn read_archive_manifest(path: &Path) -> anyhow::Result<ArchiveManifest> {
     file.read_exact(&mut manifest_bytes)?;
     let manifest: ArchiveManifest =
         serde_json::from_slice(&manifest_bytes).context("failed to decode archive manifest")?;
+    if manifest.format_version != FORMAT_VERSION {
+        bail!(
+            "Unsupported WinRehome archive format version {} (expected {}).",
+            manifest.format_version,
+            FORMAT_VERSION
+        );
+    }
     Ok(manifest)
 }
 
@@ -787,14 +794,15 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveManifest, RestoreSelection, create_backup_archive_at, read_archive_manifest,
-        restore_archive, restore_archive_with_selection, verify_archive,
+        ArchiveManifest, FORMAT_VERSION, RestoreSelection, create_backup_archive_at,
+        read_archive_manifest, restore_archive, restore_archive_with_selection, verify_archive,
     };
     use crate::models::{
         ExclusionRule, InstalledAppRecord, PathStats, PortableAppCandidate, PortableConfidence,
         UserDataRoot,
     };
     use crate::plan::BackupPreview;
+    use serde_json::{Value, json};
     use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
@@ -1350,6 +1358,70 @@ mod tests {
 
         assert_eq!(verification.verified_files, 1);
         assert_eq!(verification.verified_bytes, 12);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_unsupported_archive_format_version() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-format-version-{unique}"));
+        fs::create_dir_all(&root).expect("create test root");
+        let docs = root.join("Docs");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::write(docs.join("note.txt"), b"hello").expect("write docs");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files",
+                label: "Documents",
+                path: docs.clone(),
+                reason: "Test documents",
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 5,
+                },
+            }],
+            exclusion_rules: vec![],
+        };
+
+        let archive = create_backup_archive_at(
+            &preview,
+            &HashSet::from([docs.display().to_string().to_lowercase()]),
+            &HashSet::new(),
+            &root.join("archive"),
+        )
+        .expect("create archive");
+
+        let mut bytes = fs::read(&archive.archive_path).expect("read archive bytes");
+        let footer = &bytes[bytes.len() - 20..];
+        let manifest_offset = u64::from_le_bytes(footer[0..8].try_into().expect("footer offset"));
+        let manifest_len = u64::from_le_bytes(footer[8..16].try_into().expect("footer length"));
+        let start = manifest_offset as usize;
+        let end = start + manifest_len as usize;
+        let manifest_bytes = &bytes[start..end];
+        let mut manifest: Value =
+            serde_json::from_slice(manifest_bytes).expect("decode stored manifest");
+        manifest["format_version"] = json!(FORMAT_VERSION + 1);
+        let patched_manifest =
+            serde_json::to_vec_pretty(&manifest).expect("encode patched manifest");
+        assert_eq!(patched_manifest.len(), manifest_bytes.len());
+        bytes[start..end].copy_from_slice(&patched_manifest);
+        fs::write(&archive.archive_path, &bytes).expect("rewrite archive");
+
+        let error = read_archive_manifest(&archive.archive_path)
+            .expect_err("unsupported version should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("Unsupported WinRehome archive format version")
+        );
 
         let _ = fs::remove_dir_all(root);
     }

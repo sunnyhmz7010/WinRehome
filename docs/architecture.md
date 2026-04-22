@@ -37,6 +37,7 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 
 - One archive file per snapshot
 - `WRH1` header plus manifest footer
+- Archive reads validate the manifest format version before restore or verify continues
 - Per-file metadata with source path, archive path, offsets, sizes, and CRC32
 - Deflate compression per file in the current prototype
 - Restore selection is driven by manifest root prefixes instead of per-file UI state
