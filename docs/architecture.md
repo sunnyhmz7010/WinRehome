@@ -21,13 +21,15 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 - Desktop preview UI with reviewable backup-plan estimates
 - Single-file `.wrh` archive writing with manifest validation
 - Basic `.wrh` restore flow to a target directory with size and CRC checks
+- Local config persistence for saved selections and restore targets
+- Category-level restore selection for user data vs. portable apps
 
 ### Deliberately deferred
 
 - Full-disk intelligent scanning
 - Incremental block deduplication
 - Shadow copy support for locked files
-- Fine-grained restore conflict handling
+- Fine-grained restore conflict handling beyond current fail-on-conflict behavior
 
 ## Archive design target
 

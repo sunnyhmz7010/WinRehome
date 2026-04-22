@@ -99,6 +99,7 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - Do not introduce restore flows that overwrite user files silently.
 - The current archive format is a single `.wrh` file with a manifest footer; keep format updates explicit and reviewable.
 - Restore logic must continue to verify stored size and CRC before reporting success.
+- Restore UX may offer category-level restore, but safety checks must stay the same regardless of scope.
 - If archive format behavior changes, document compatibility expectations in `docs/architecture.md`.
 
 ### Repository Release Conventions

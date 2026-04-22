@@ -33,6 +33,21 @@ pub struct RestoreResult {
     pub restored_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RestoreSelection {
+    pub restore_user_data: bool,
+    pub restore_portable_apps: bool,
+}
+
+impl Default for RestoreSelection {
+    fn default() -> Self {
+        Self {
+            restore_user_data: true,
+            restore_portable_apps: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveManifest {
     pub format_version: u32,
@@ -217,8 +232,26 @@ pub fn restore_archive(
     archive_path: &Path,
     destination_root: &Path,
 ) -> anyhow::Result<RestoreResult> {
+    restore_archive_with_selection(archive_path, destination_root, RestoreSelection::default())
+}
+
+pub fn restore_archive_with_selection(
+    archive_path: &Path,
+    destination_root: &Path,
+    selection: RestoreSelection,
+) -> anyhow::Result<RestoreResult> {
     let manifest = read_archive_manifest(archive_path)?;
-    if manifest.files.is_empty() {
+    let selected_files: Vec<&ArchivedFileEntry> = manifest
+        .files
+        .iter()
+        .filter(|entry| match entry.entry_kind.as_str() {
+            "user_data" => selection.restore_user_data,
+            "portable_app" => selection.restore_portable_apps,
+            _ => false,
+        })
+        .collect();
+
+    if selected_files.is_empty() {
         bail!("Archive does not contain any files to restore.");
     }
 
@@ -234,7 +267,7 @@ pub fn restore_archive(
     let mut restored_files = 0_usize;
     let mut restored_bytes = 0_u64;
 
-    for entry in &manifest.files {
+    for entry in selected_files {
         let output_path = destination_root.join(Path::new(&entry.archive_path));
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent).with_context(|| {
@@ -626,7 +659,8 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveManifest, create_backup_archive_at, read_archive_manifest, restore_archive,
+        ArchiveManifest, RestoreSelection, create_backup_archive_at, read_archive_manifest,
+        restore_archive, restore_archive_with_selection,
     };
     use crate::models::{
         ExclusionRule, InstalledAppRecord, PathStats, PortableAppCandidate, PortableConfidence,
@@ -838,6 +872,82 @@ mod tests {
             .expect_err("restore should refuse overwrite");
 
         assert!(error.to_string().contains("already exists"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_can_limit_to_user_data_only() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-restore-filter-{unique}"));
+        fs::create_dir_all(&root).expect("create test root");
+        let docs = root.join("Docs");
+        let portable = root.join("PortableTool");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::create_dir_all(&portable).expect("create portable");
+        fs::write(docs.join("note.txt"), b"hello world").expect("write docs");
+        fs::write(portable.join("Tool.exe"), b"exe-bytes").expect("write exe");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![PortableAppCandidate {
+                display_name: "PortableTool".to_string(),
+                root_path: portable.clone(),
+                main_executable: portable.join("Tool.exe"),
+                confidence: PortableConfidence::High,
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 9,
+                },
+                reasons: vec!["portable".to_string()],
+            }],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files",
+                label: "Documents",
+                path: docs.clone(),
+                reason: "Test documents",
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 11,
+                },
+            }],
+            exclusion_rules: vec![],
+        };
+
+        let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
+        let selected_portable_apps = HashSet::from([portable.display().to_string().to_lowercase()]);
+        let archive_dir = root.join("archive");
+        let restore_dir = root.join("restore");
+
+        let result = create_backup_archive_at(
+            &preview,
+            &selected_user_roots,
+            &selected_portable_apps,
+            &archive_dir,
+        )
+        .expect("create archive");
+        let restore = restore_archive_with_selection(
+            &result.archive_path,
+            &restore_dir,
+            RestoreSelection {
+                restore_user_data: true,
+                restore_portable_apps: false,
+            },
+        )
+        .expect("restore filtered archive");
+
+        assert_eq!(restore.restored_files, 1);
+        assert!(
+            restore_dir
+                .join("user/Personal Files/Documents/note.txt")
+                .exists()
+        );
+        assert!(!restore_dir.join("portable/PortableTool/Tool.exe").exists());
 
         let _ = fs::remove_dir_all(root);
     }

@@ -16,6 +16,8 @@ pub struct WinRehomeApp {
     selected_portable_apps: HashSet<String>,
     archive_path_input: String,
     restore_destination_input: String,
+    restore_user_data: bool,
+    restore_portable_apps: bool,
     loaded_archive: Option<LoadedArchive>,
     last_archive: Option<archive::BackupResult>,
     last_restore: Option<archive::RestoreResult>,
@@ -24,13 +26,19 @@ pub struct WinRehomeApp {
 
 impl WinRehomeApp {
     pub fn new() -> Self {
-        let mut app = Self::default();
+        let mut app = Self {
+            restore_user_data: true,
+            restore_portable_apps: true,
+            ..Self::default()
+        };
         if let Ok(Some(saved)) = config::load_config() {
             app.selected_user_roots = config::normalize_existing_paths(&saved.selected_user_roots);
             app.selected_portable_apps =
                 config::normalize_existing_paths(&saved.selected_portable_apps);
             app.archive_path_input = saved.last_archive_path.unwrap_or_default();
             app.restore_destination_input = saved.last_restore_destination.unwrap_or_default();
+            app.restore_user_data = saved.restore_user_data;
+            app.restore_portable_apps = saved.restore_portable_apps;
         }
         app
     }
@@ -71,6 +79,8 @@ impl WinRehomeApp {
                     .unwrap_or_default();
                 self.archive_path_input = path.display().to_string();
                 self.loaded_archive = Some(LoadedArchive { path, manifest });
+                self.restore_user_data = true;
+                self.restore_portable_apps = true;
                 self.last_restore = None;
                 self.last_error = None;
                 let _ = self.persist_config();
@@ -100,6 +110,8 @@ impl WinRehomeApp {
                 .then(|| self.archive_path_input.trim().to_string()),
             last_restore_destination: (!self.restore_destination_input.trim().is_empty())
                 .then(|| self.restore_destination_input.trim().to_string()),
+            restore_user_data: self.restore_user_data,
+            restore_portable_apps: self.restore_portable_apps,
         })
     }
 }
@@ -225,11 +237,53 @@ impl eframe::App for WinRehomeApp {
                         loaded.manifest.selected_portable_apps.len()
                     ));
                     ui.horizontal(|ui| {
+                        if ui
+                            .checkbox(&mut self.restore_user_data, "Restore user data")
+                            .changed()
+                        {
+                            let _ = self.persist_config();
+                        }
+                        if ui
+                            .checkbox(&mut self.restore_portable_apps, "Restore portable apps")
+                            .changed()
+                        {
+                            let _ = self.persist_config();
+                        }
+                    });
+                    ui.collapsing("Archive contents", |ui| {
+                        if !loaded.manifest.selected_user_roots.is_empty() {
+                            ui.label(RichText::new("User roots").strong());
+                            for root in &loaded.manifest.selected_user_roots {
+                                ui.small(format!("{} -> {}", root.label, root.path));
+                            }
+                            ui.add_space(6.0);
+                        }
+                        if !loaded.manifest.selected_portable_apps.is_empty() {
+                            ui.label(RichText::new("Portable apps").strong());
+                            for app in &loaded.manifest.selected_portable_apps {
+                                ui.small(format!("{} -> {}", app.display_name, app.root_path));
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
                         ui.label("Restore to");
                         ui.text_edit_singleline(&mut self.restore_destination_input);
                         if ui.button("Restore Archive").clicked() {
                             let destination = PathBuf::from(self.restore_destination_input.trim());
-                            match archive::restore_archive(&loaded.path, &destination) {
+                            let restore_result =
+                                if self.restore_user_data && self.restore_portable_apps {
+                                    archive::restore_archive(&loaded.path, &destination)
+                                } else {
+                                    archive::restore_archive_with_selection(
+                                        &loaded.path,
+                                        &destination,
+                                        archive::RestoreSelection {
+                                            restore_user_data: self.restore_user_data,
+                                            restore_portable_apps: self.restore_portable_apps,
+                                        },
+                                    )
+                                };
+                            match restore_result {
                                 Ok(result) => {
                                     self.last_restore = Some(result);
                                     self.last_error = None;
