@@ -16,9 +16,9 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 ### Included in MVP
 
 - Installed software inventory from registry uninstall keys
-- High-value user data roots
+- High-value user data roots with default recommendations
 - Portable application candidate discovery from curated search roots
-- Desktop preview UI
+- Desktop preview UI with reviewable backup-plan estimates
 
 ### Deliberately deferred
 

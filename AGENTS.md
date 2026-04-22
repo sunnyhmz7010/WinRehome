@@ -18,6 +18,7 @@ Keep `README.md` user-facing. Contributor rules, operational constraints, and co
 - `src/models.rs`: shared domain models
 - `src/plan.rs`: scan, classification, and preview plan logic
 - `docs/architecture.md`: architecture and reliability notes
+- `.github/workflows/cd.yaml`: GitHub Release build and asset upload workflow
 - `README.md`: Chinese user-facing project overview
 - `Cargo.toml`: package metadata and dependencies
 
@@ -71,3 +72,10 @@ If dependency fetches fail because of proxy settings, clear proxy environment va
 - Prefer conservative behavior over clever behavior when user data safety is involved.
 - Do not leave temporary debug files, local archives, or exploratory outputs in the working tree.
 - When repo structure, commands, or rules change, update this file in the same task.
+
+## Release Conventions
+
+- GitHub release packaging is handled by `.github/workflows/cd.yaml`.
+- The release workflow is triggered by the `Release published` event.
+- Release assets should include a Windows executable named like `WinRehome-vX.Y.Z-windows-x64.exe`.
+- If release packaging changes, update both the workflow and this file in the same task.
