@@ -2,6 +2,7 @@ use crate::plan::{path_key, should_exclude_path};
 use anyhow::{Context, bail};
 use crc32fast::Hasher;
 use flate2::Compression;
+use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -24,7 +25,15 @@ pub struct BackupResult {
     pub stored_bytes: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+pub struct RestoreResult {
+    pub archive_path: PathBuf,
+    pub destination_root: PathBuf,
+    pub restored_files: usize,
+    pub restored_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveManifest {
     pub format_version: u32,
     pub created_at_unix: u64,
@@ -38,7 +47,7 @@ pub struct ArchiveManifest {
     pub stored_bytes: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestInstalledApp {
     pub display_name: String,
     pub source: String,
@@ -46,7 +55,7 @@ pub struct ManifestInstalledApp {
     pub uninstall_key: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestRoot {
     pub category: String,
     pub label: String,
@@ -54,7 +63,7 @@ pub struct ManifestRoot {
     pub reason: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestPortableApp {
     pub display_name: String,
     pub root_path: String,
@@ -63,7 +72,7 @@ pub struct ManifestPortableApp {
     pub reasons: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchivedFileEntry {
     pub source_path: String,
     pub archive_path: String,
@@ -105,6 +114,32 @@ impl<W: Write> Write for CountingWriter<W> {
     }
 }
 
+#[derive(Debug)]
+struct RangeReader {
+    file: File,
+    remaining: u64,
+}
+
+impl RangeReader {
+    fn new(mut file: File, offset: u64, remaining: u64) -> anyhow::Result<Self> {
+        file.seek(SeekFrom::Start(offset))?;
+        Ok(Self { file, remaining })
+    }
+}
+
+impl Read for RangeReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Ok(0);
+        }
+
+        let limit = self.remaining.min(buf.len() as u64) as usize;
+        let read = self.file.read(&mut buf[..limit])?;
+        self.remaining -= read as u64;
+        Ok(read)
+    }
+}
+
 pub fn create_backup_archive(
     preview: &crate::plan::BackupPreview,
     selected_user_roots: &HashSet<String>,
@@ -117,6 +152,146 @@ pub fn create_backup_archive(
         selected_portable_apps,
         &output_dir,
     )
+}
+
+pub fn find_latest_archive() -> anyhow::Result<Option<PathBuf>> {
+    let output_dir = default_output_dir()?;
+    if !output_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut latest: Option<(PathBuf, SystemTime)> = None;
+    for entry in fs::read_dir(&output_dir)? {
+        let entry = match entry {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("wrh") {
+            continue;
+        }
+
+        let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+
+        match &latest {
+            Some((_, current_modified)) if modified <= *current_modified => {}
+            _ => latest = Some((path, modified)),
+        }
+    }
+
+    Ok(latest.map(|(path, _)| path))
+}
+
+pub fn default_output_dir() -> anyhow::Result<PathBuf> {
+    if let Some(profile) = env::var_os("USERPROFILE") {
+        let desktop = PathBuf::from(profile)
+            .join("Desktop")
+            .join("WinRehome Backups");
+        return Ok(desktop);
+    }
+
+    Ok(env::current_dir()?.join("WinRehome Backups"))
+}
+
+pub fn default_restore_dir(archive_path: &Path) -> anyhow::Result<PathBuf> {
+    let restore_root = if let Some(profile) = env::var_os("USERPROFILE") {
+        PathBuf::from(profile)
+            .join("Desktop")
+            .join("WinRehome Restores")
+    } else {
+        env::current_dir()?.join("WinRehome Restores")
+    };
+
+    let archive_name = archive_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("restored-archive");
+    Ok(restore_root.join(sanitize_segment(archive_name)))
+}
+
+pub fn restore_archive(
+    archive_path: &Path,
+    destination_root: &Path,
+) -> anyhow::Result<RestoreResult> {
+    let manifest = read_archive_manifest(archive_path)?;
+    if manifest.files.is_empty() {
+        bail!("Archive does not contain any files to restore.");
+    }
+
+    fs::create_dir_all(destination_root).with_context(|| {
+        format!(
+            "failed to create restore destination {}",
+            destination_root.display()
+        )
+    })?;
+
+    let archive = File::open(archive_path)
+        .with_context(|| format!("failed to open archive {}", archive_path.display()))?;
+    let mut restored_files = 0_usize;
+    let mut restored_bytes = 0_u64;
+
+    for entry in &manifest.files {
+        let output_path = destination_root.join(Path::new(&entry.archive_path));
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create restore directory {}", parent.display())
+            })?;
+        }
+        if output_path.exists() {
+            bail!("restore target already exists: {}", output_path.display());
+        }
+
+        let mut range_reader =
+            RangeReader::new(archive.try_clone()?, entry.offset, entry.stored_size)?;
+        let mut decoder = DeflateDecoder::new(&mut range_reader);
+        let mut output = File::create(&output_path)
+            .with_context(|| format!("failed to create {}", output_path.display()))?;
+        let mut hasher = Hasher::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut restored_len = 0_u64;
+
+        loop {
+            let read = decoder.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            output.write_all(&buffer[..read])?;
+            hasher.update(&buffer[..read]);
+            restored_len += read as u64;
+        }
+
+        let actual_crc = hasher.finalize();
+        if restored_len != entry.original_size {
+            bail!(
+                "restore size mismatch for {}: expected {}, got {}",
+                entry.archive_path,
+                entry.original_size,
+                restored_len
+            );
+        }
+        if actual_crc != entry.crc32 {
+            bail!(
+                "restore checksum mismatch for {}: expected {}, got {}",
+                entry.archive_path,
+                entry.crc32,
+                actual_crc
+            );
+        }
+
+        restored_files += 1;
+        restored_bytes += restored_len;
+    }
+
+    Ok(RestoreResult {
+        archive_path: archive_path.to_path_buf(),
+        destination_root: destination_root.to_path_buf(),
+        restored_files,
+        restored_bytes,
+    })
 }
 
 fn create_backup_archive_at(
@@ -414,17 +589,6 @@ fn write_file_entry(archive: &mut File, pending: PendingFile) -> anyhow::Result<
     })
 }
 
-fn default_output_dir() -> anyhow::Result<PathBuf> {
-    if let Some(profile) = env::var_os("USERPROFILE") {
-        let desktop = PathBuf::from(profile)
-            .join("Desktop")
-            .join("WinRehome Backups");
-        return Ok(desktop);
-    }
-
-    Ok(env::current_dir()?.join("WinRehome Backups"))
-}
-
 fn sanitize_segment(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -461,7 +625,9 @@ fn now_unix() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArchiveManifest, create_backup_archive_at, read_archive_manifest};
+    use super::{
+        ArchiveManifest, create_backup_archive_at, read_archive_manifest, restore_archive,
+    };
     use crate::models::{
         ExclusionRule, InstalledAppRecord, PathStats, PortableAppCandidate, PortableConfidence,
         UserDataRoot,
@@ -545,6 +711,133 @@ mod tests {
         assert_eq!(manifest.selected_user_roots.len(), 1);
         assert_eq!(manifest.selected_portable_apps.len(), 1);
         assert!(result.archive_path.exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restores_archive_contents() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-restore-{unique}"));
+        fs::create_dir_all(&root).expect("create restore test root");
+        let docs = root.join("Docs");
+        let portable = root.join("PortableTool");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::create_dir_all(&portable).expect("create portable");
+        fs::write(docs.join("note.txt"), b"hello world").expect("write docs");
+        fs::write(portable.join("Tool.exe"), b"exe-bytes").expect("write exe");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![PortableAppCandidate {
+                display_name: "PortableTool".to_string(),
+                root_path: portable.clone(),
+                main_executable: portable.join("Tool.exe"),
+                confidence: PortableConfidence::High,
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 9,
+                },
+                reasons: vec!["portable".to_string()],
+            }],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files",
+                label: "Documents",
+                path: docs.clone(),
+                reason: "Test documents",
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 11,
+                },
+            }],
+            exclusion_rules: vec![],
+        };
+
+        let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
+        let selected_portable_apps = HashSet::from([portable.display().to_string().to_lowercase()]);
+        let archive_dir = root.join("archive");
+        let restore_dir = root.join("restore");
+
+        let result = create_backup_archive_at(
+            &preview,
+            &selected_user_roots,
+            &selected_portable_apps,
+            &archive_dir,
+        )
+        .expect("create archive");
+        let restore = restore_archive(&result.archive_path, &restore_dir).expect("restore archive");
+
+        assert_eq!(restore.restored_files, 2);
+        assert_eq!(
+            fs::read(restore_dir.join("user/Personal Files/Documents/note.txt"))
+                .expect("read restored note"),
+            b"hello world"
+        );
+        assert_eq!(
+            fs::read(restore_dir.join("portable/PortableTool/Tool.exe"))
+                .expect("read restored exe"),
+            b"exe-bytes"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_refuses_to_overwrite_existing_files() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-conflict-{unique}"));
+        fs::create_dir_all(&root).expect("create conflict test root");
+        let docs = root.join("Docs");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::write(docs.join("note.txt"), b"hello").expect("write docs");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files",
+                label: "Documents",
+                path: docs.clone(),
+                reason: "Test documents",
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 5,
+                },
+            }],
+            exclusion_rules: vec![],
+        };
+
+        let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
+        let archive_dir = root.join("archive");
+        let restore_dir = root.join("restore");
+        fs::create_dir_all(restore_dir.join("user/Personal Files/Documents"))
+            .expect("create restore docs");
+        fs::write(
+            restore_dir.join("user/Personal Files/Documents/note.txt"),
+            b"existing",
+        )
+        .expect("write existing restored file");
+
+        let result = create_backup_archive_at(
+            &preview,
+            &selected_user_roots,
+            &HashSet::new(),
+            &archive_dir,
+        )
+        .expect("create archive");
+        let error = restore_archive(&result.archive_path, &restore_dir)
+            .expect_err("restore should refuse overwrite");
+
+        assert!(error.to_string().contains("already exists"));
 
         let _ = fs::remove_dir_all(root);
     }

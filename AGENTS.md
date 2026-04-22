@@ -17,7 +17,7 @@ Keep `README.md` user-facing. Contributor rules, operational constraints, and co
 - `src/app.rs`: egui UI shell and preview screen
 - `src/models.rs`: shared domain models
 - `src/plan.rs`: scan, classification, and preview plan logic
-- `src/archive.rs`: `.wrh` archive writing and manifest reading
+- `src/archive.rs`: `.wrh` archive writing, manifest reading, and restore logic
 - `docs/architecture.md`: architecture and reliability notes
 - `.github/workflows/cd.yaml`: GitHub Release build and asset upload workflow
 - `README.md`: Chinese user-facing project overview
@@ -59,6 +59,7 @@ If dependency fetches fail because of proxy settings, clear proxy environment va
 - Do not introduce restore flows that overwrite user files silently.
 - If archive format behavior changes, document compatibility expectations in `docs/architecture.md`.
 - The current archive format is a single `.wrh` file with a manifest footer; keep format updates explicit and reviewable.
+- Restore logic must continue to verify stored size and CRC before reporting success.
 
 ## Testing & Validation
 

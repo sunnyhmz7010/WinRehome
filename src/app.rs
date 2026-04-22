@@ -1,13 +1,24 @@
 use crate::{archive, plan};
 use eframe::egui::{self, Color32, RichText};
 use std::collections::HashSet;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone)]
+struct LoadedArchive {
+    path: PathBuf,
+    manifest: archive::ArchiveManifest,
+}
 
 #[derive(Default)]
 pub struct WinRehomeApp {
     preview: Option<plan::BackupPreview>,
     selected_user_roots: HashSet<String>,
     selected_portable_apps: HashSet<String>,
+    archive_path_input: String,
+    restore_destination_input: String,
+    loaded_archive: Option<LoadedArchive>,
     last_archive: Option<archive::BackupResult>,
+    last_restore: Option<archive::RestoreResult>,
     last_error: Option<String>,
 }
 
@@ -19,11 +30,31 @@ impl WinRehomeApp {
         self.last_error = None;
     }
 
+    fn load_archive_from_path(&mut self, path: PathBuf) {
+        match archive::read_archive_manifest(&path) {
+            Ok(manifest) => {
+                self.restore_destination_input = archive::default_restore_dir(&path)
+                    .map(|value| value.display().to_string())
+                    .unwrap_or_default();
+                self.archive_path_input = path.display().to_string();
+                self.loaded_archive = Some(LoadedArchive { path, manifest });
+                self.last_restore = None;
+                self.last_error = None;
+            }
+            Err(error) => {
+                self.loaded_archive = None;
+                self.last_restore = None;
+                self.last_error = Some(error.to_string());
+            }
+        }
+    }
+
     fn clear_preview(&mut self) {
         self.preview = None;
         self.selected_user_roots.clear();
         self.selected_portable_apps.clear();
         self.last_archive = None;
+        self.last_restore = None;
         self.last_error = None;
     }
 }
@@ -85,7 +116,90 @@ impl eframe::App for WinRehomeApp {
                 );
             }
 
-            if let Some(preview) = &self.preview {
+            if let Some(result) = &self.last_restore {
+                ui.add_space(10.0);
+                ui.colored_label(
+                    Color32::from_rgb(45, 95, 175),
+                    format!(
+                        "Archive restored: {} -> {} ({} files, {})",
+                        result.archive_path.display(),
+                        result.destination_root.display(),
+                        result.restored_files,
+                        format_bytes(result.restored_bytes)
+                    ),
+                );
+            }
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(10.0);
+            ui.group(|ui| {
+                ui.label(RichText::new("Archive Restore").strong());
+                ui.horizontal(|ui| {
+                    if ui.button("Load Latest Archive").clicked() {
+                        match archive::find_latest_archive() {
+                            Ok(Some(path)) => self.load_archive_from_path(path),
+                            Ok(None) => {
+                                self.loaded_archive = None;
+                                self.last_restore = None;
+                                self.last_error = Some(
+                                    "No .wrh archive was found in the default backup folder."
+                                        .to_string(),
+                                );
+                            }
+                            Err(error) => {
+                                self.loaded_archive = None;
+                                self.last_restore = None;
+                                self.last_error = Some(error.to_string());
+                            }
+                        }
+                    }
+
+                    ui.label("Archive path");
+                    ui.text_edit_singleline(&mut self.archive_path_input);
+                    if ui.button("Load Archive").clicked() {
+                        let path = PathBuf::from(self.archive_path_input.trim());
+                        self.load_archive_from_path(path);
+                    }
+                });
+
+                if let Some(loaded) = self.loaded_archive.clone() {
+                    ui.add_space(8.0);
+                    ui.label(format!("Loaded archive: {}", loaded.path.display()));
+                    ui.label(format!(
+                        "Created: {} | Files: {} | Original: {} | Stored: {}",
+                        loaded.manifest.created_at_unix,
+                        loaded.manifest.files.len(),
+                        format_bytes(loaded.manifest.original_bytes),
+                        format_bytes(loaded.manifest.stored_bytes)
+                    ));
+                    ui.label(format!(
+                        "Installed app records: {} | User roots: {} | Portable apps: {}",
+                        loaded.manifest.installed_apps.len(),
+                        loaded.manifest.selected_user_roots.len(),
+                        loaded.manifest.selected_portable_apps.len()
+                    ));
+                    ui.horizontal(|ui| {
+                        ui.label("Restore to");
+                        ui.text_edit_singleline(&mut self.restore_destination_input);
+                        if ui.button("Restore Archive").clicked() {
+                            let destination = PathBuf::from(self.restore_destination_input.trim());
+                            match archive::restore_archive(&loaded.path, &destination) {
+                                Ok(result) => {
+                                    self.last_restore = Some(result);
+                                    self.last_error = None;
+                                }
+                                Err(error) => {
+                                    self.last_restore = None;
+                                    self.last_error = Some(error.to_string());
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+
+            if let Some(preview) = self.preview.clone() {
                 let summary = preview
                     .summarize_selection(&self.selected_user_roots, &self.selected_portable_apps);
 
@@ -125,16 +239,20 @@ impl eframe::App for WinRehomeApp {
 
                     if ui.button("Create Backup Archive").clicked() {
                         match archive::create_backup_archive(
-                            preview,
+                            &preview,
                             &self.selected_user_roots,
                             &self.selected_portable_apps,
                         ) {
                             Ok(result) => {
+                                self.load_archive_from_path(result.archive_path.clone());
                                 self.last_archive = Some(result);
+                                self.last_restore = None;
                                 self.last_error = None;
                             }
                             Err(error) => {
                                 self.last_archive = None;
+                                self.loaded_archive = None;
+                                self.last_restore = None;
                                 self.last_error = Some(error.to_string());
                             }
                         }
