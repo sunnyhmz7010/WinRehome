@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub last_restore_destination: Option<String>,
     pub restore_user_data: bool,
     pub restore_portable_apps: bool,
+    pub selected_restore_roots: HashSet<String>,
+    pub skip_existing_restore_files: bool,
 }
 
 impl Default for AppConfig {
@@ -24,6 +26,8 @@ impl Default for AppConfig {
             last_restore_destination: None,
             restore_user_data: true,
             restore_portable_apps: true,
+            selected_restore_roots: HashSet::new(),
+            skip_existing_restore_files: false,
         }
     }
 }
@@ -111,5 +115,7 @@ mod tests {
         assert!(config.last_restore_destination.is_none());
         assert!(config.restore_user_data);
         assert!(config.restore_portable_apps);
+        assert!(config.selected_restore_roots.is_empty());
+        assert!(!config.skip_existing_restore_files);
     }
 }

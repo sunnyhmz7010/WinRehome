@@ -4,7 +4,7 @@
 
 These rules are intentionally written in a reusable way so they can be copied into other repositories as a starting point.
 
-- This repository's `Reusable Rules` section is intended to be the shared baseline across projects. By default, other project `AGENTS.md` files should keep these reusable rules identical unless the user explicitly asks for a deliberate deviation.
+- This repository's `Reusable Rules` section is intended to be the shared baseline across projects. By default, other project `AGENTS.md` files should keep these reusable rules aligned in structure, intent, and policy unless the user explicitly asks for a deliberate deviation.
 
 ### General Working Style
 
@@ -13,6 +13,7 @@ These rules are intentionally written in a reusable way so they can be copied in
 - Keep user-facing docs concise and practical; avoid adding AI collaboration notes or marketing filler unless explicitly requested.
 - Keep `README.md` user-facing and promotional for external readers. Contributor rules, operational constraints, missing-work notes, AI guidance, release-process conventions, and collaboration guidance belong in `AGENTS.md`, not `README.md`.
 - When updating `README.md`, follow the style of strong, high-star GitHub project READMEs: lead with clear value, polished feature framing, concise usage/integration guidance, and externally useful examples.
+- For the project's leading one-sentence summary in README or similar public-facing docs, prefer a direct product-description sentence instead of starting with the repository name or "This project is ...", unless the user explicitly asks for that phrasing.
 - Do not add README sections framed as internal progress tracking or roadmap bookkeeping, such as “当前已实现”, “当前缺失”, “后续里程碑”, “未来计划”, or similar wording.
 - Do not use “当前…” style internal status phrasing in README copy unless the user explicitly requests it. README should read like a polished public-facing project page, not an internal handoff note.
 - For searches, prefer `rg`.
@@ -27,7 +28,8 @@ These rules are intentionally written in a reusable way so they can be copied in
 - When repository structure, commands, external capabilities, release process, or recurring engineering pitfalls change, update `AGENTS.md` in the same task. Keeping this file current is required, not optional.
 - If newly learned guidance appears to be reusable across repositories rather than specific to the current project, ask whether to automatically scan other project `AGENTS.md` files, apply the shared rule where appropriate, and push those updates to their remotes.
 - For GitHub-hosted repositories, maintain the baseline repository-governance files consistently across projects unless the user explicitly asks for divergence. This baseline includes `LICENSE`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue templates, and similar repo-health/community files.
-- If one of those GitHub governance files is added, removed, or materially changed in a way that should become the new shared baseline, ask whether to propagate the same change across other GitHub repositories and push the updates.
+- "Consistently" does not mean every line must be identical. Keep the structure, tone, and policy baseline aligned, but make the necessary project-specific substitutions for repository name, product name, links, version fields, platform fields, security scope, issue-form fields, and other repo-specific facts.
+- If one of those GitHub governance files is added, removed, or materially changed in a way that should become the new shared baseline, ask whether to propagate the same baseline change across other GitHub repositories and push the updates, while still preserving required project-specific substitutions.
 
 ### Security And Review
 
@@ -55,7 +57,8 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 
 ### Project Summary
 
-- This project is a migration backup tool, not a disk-image backup product.
+- 一个面向 Windows 的迁移备份工具原型，目标是在尽可能节省备份空间的前提下，保留真正有迁移价值的个人数据。
+- Not a disk-image backup product.
 - Goal: keep only data with real migration value while minimizing archive size.
 - Installed applications are recorded as inventory, not backed up as installed binaries.
 - Portable applications are detected as candidates, reviewed, and packed into the main archive.
@@ -87,6 +90,7 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - Do not edit generated files under `target/`.
 - Keep UI code in `src/app.rs`; keep scanning, archive, restore, and config behavior in focused modules.
 - Prefer explicit helper names such as `is_known_noise` over vague utility naming.
+- Keep restore selection persistence compatible with manual archive reloads; saved root selections should not be silently discarded when reopening the same archive.
 
 ### Backup Classification Rules
 
@@ -104,6 +108,8 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - The current archive format is a single `.wrh` file with a manifest footer; keep format updates explicit and reviewable.
 - Restore logic must continue to verify stored size and CRC before reporting success.
 - Restore UX may offer category-level restore, but safety checks must stay the same regardless of scope.
+- Empty explicit restore-root selection means restore nothing; only the plain full-restore entrypoint should restore all manifest roots by default.
+- Skip-existing restore behavior must remain opt-in and must report how many files were skipped.
 - If archive format behavior changes, document compatibility expectations in `docs/architecture.md`.
 
 ### Repository Release Conventions

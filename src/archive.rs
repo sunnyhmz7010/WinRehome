@@ -31,12 +31,22 @@ pub struct RestoreResult {
     pub destination_root: PathBuf,
     pub restored_files: usize,
     pub restored_bytes: u64,
+    pub skipped_existing_files: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+pub struct VerificationResult {
+    pub archive_path: PathBuf,
+    pub verified_files: usize,
+    pub verified_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreSelection {
     pub restore_user_data: bool,
     pub restore_portable_apps: bool,
+    pub selected_roots: HashSet<String>,
+    pub skip_existing_files: bool,
 }
 
 impl Default for RestoreSelection {
@@ -44,6 +54,8 @@ impl Default for RestoreSelection {
         Self {
             restore_user_data: true,
             restore_portable_apps: true,
+            selected_roots: HashSet::new(),
+            skip_existing_files: false,
         }
     }
 }
@@ -170,12 +182,16 @@ pub fn create_backup_archive(
 }
 
 pub fn find_latest_archive() -> anyhow::Result<Option<PathBuf>> {
+    Ok(list_recent_archives(1)?.into_iter().next())
+}
+
+pub fn list_recent_archives(limit: usize) -> anyhow::Result<Vec<PathBuf>> {
     let output_dir = default_output_dir()?;
     if !output_dir.exists() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
 
-    let mut latest: Option<(PathBuf, SystemTime)> = None;
+    let mut archives = Vec::new();
     for entry in fs::read_dir(&output_dir)? {
         let entry = match entry {
             Ok(value) => value,
@@ -192,13 +208,15 @@ pub fn find_latest_archive() -> anyhow::Result<Option<PathBuf>> {
             Err(_) => continue,
         };
 
-        match &latest {
-            Some((_, current_modified)) if modified <= *current_modified => {}
-            _ => latest = Some((path, modified)),
-        }
+        archives.push((path, modified));
     }
 
-    Ok(latest.map(|(path, _)| path))
+    archives.sort_by(|left, right| right.1.cmp(&left.1));
+    let mut paths: Vec<PathBuf> = archives.into_iter().map(|(path, _)| path).collect();
+    if limit > 0 && paths.len() > limit {
+        paths.truncate(limit);
+    }
+    Ok(paths)
 }
 
 pub fn default_output_dir() -> anyhow::Result<PathBuf> {
@@ -232,7 +250,16 @@ pub fn restore_archive(
     archive_path: &Path,
     destination_root: &Path,
 ) -> anyhow::Result<RestoreResult> {
-    restore_archive_with_selection(archive_path, destination_root, RestoreSelection::default())
+    let manifest = read_archive_manifest(archive_path)?;
+    restore_archive_with_manifest(
+        archive_path,
+        destination_root,
+        &manifest,
+        RestoreSelection {
+            selected_roots: collect_manifest_restore_roots(&manifest),
+            ..RestoreSelection::default()
+        },
+    )
 }
 
 pub fn restore_archive_with_selection(
@@ -241,13 +268,36 @@ pub fn restore_archive_with_selection(
     selection: RestoreSelection,
 ) -> anyhow::Result<RestoreResult> {
     let manifest = read_archive_manifest(archive_path)?;
+    restore_archive_with_manifest(archive_path, destination_root, &manifest, selection)
+}
+
+fn restore_archive_with_manifest(
+    archive_path: &Path,
+    destination_root: &Path,
+    manifest: &ArchiveManifest,
+    selection: RestoreSelection,
+) -> anyhow::Result<RestoreResult> {
     let selected_files: Vec<&ArchivedFileEntry> = manifest
         .files
         .iter()
-        .filter(|entry| match entry.entry_kind.as_str() {
-            "user_data" => selection.restore_user_data,
-            "portable_app" => selection.restore_portable_apps,
-            _ => false,
+        .filter(|entry| {
+            let category_allowed = match entry.entry_kind.as_str() {
+                "user_data" => selection.restore_user_data,
+                "portable_app" => selection.restore_portable_apps,
+                _ => false,
+            };
+
+            if !category_allowed {
+                return false;
+            }
+
+            if selection.selected_roots.is_empty() {
+                return false;
+            }
+
+            selection.selected_roots.iter().any(|root| {
+                entry.archive_path == *root || entry.archive_path.starts_with(&format!("{root}/"))
+            })
         })
         .collect();
 
@@ -266,6 +316,7 @@ pub fn restore_archive_with_selection(
         .with_context(|| format!("failed to open archive {}", archive_path.display()))?;
     let mut restored_files = 0_usize;
     let mut restored_bytes = 0_u64;
+    let mut skipped_existing_files = 0_usize;
 
     for entry in selected_files {
         let output_path = destination_root.join(Path::new(&entry.archive_path));
@@ -275,6 +326,10 @@ pub fn restore_archive_with_selection(
             })?;
         }
         if output_path.exists() {
+            if selection.skip_existing_files {
+                skipped_existing_files += 1;
+                continue;
+            }
             bail!("restore target already exists: {}", output_path.display());
         }
 
@@ -324,6 +379,79 @@ pub fn restore_archive_with_selection(
         destination_root: destination_root.to_path_buf(),
         restored_files,
         restored_bytes,
+        skipped_existing_files,
+    })
+}
+
+fn collect_manifest_restore_roots(manifest: &ArchiveManifest) -> HashSet<String> {
+    let mut roots = HashSet::new();
+    for root in &manifest.selected_user_roots {
+        roots.insert(format!(
+            "user/{}/{}",
+            sanitize_segment(&root.category),
+            sanitize_segment(&root.label)
+        ));
+    }
+    for app in &manifest.selected_portable_apps {
+        roots.insert(format!("portable/{}", sanitize_segment(&app.display_name)));
+    }
+    roots
+}
+
+pub fn verify_archive(archive_path: &Path) -> anyhow::Result<VerificationResult> {
+    let manifest = read_archive_manifest(archive_path)?;
+    if manifest.files.is_empty() {
+        bail!("Archive does not contain any files to verify.");
+    }
+
+    let archive = File::open(archive_path)
+        .with_context(|| format!("failed to open archive {}", archive_path.display()))?;
+    let mut verified_files = 0_usize;
+    let mut verified_bytes = 0_u64;
+
+    for entry in &manifest.files {
+        let mut range_reader =
+            RangeReader::new(archive.try_clone()?, entry.offset, entry.stored_size)?;
+        let mut decoder = DeflateDecoder::new(&mut range_reader);
+        let mut hasher = Hasher::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut verified_len = 0_u64;
+
+        loop {
+            let read = decoder.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            verified_len += read as u64;
+        }
+
+        let actual_crc = hasher.finalize();
+        if verified_len != entry.original_size {
+            bail!(
+                "verify size mismatch for {}: expected {}, got {}",
+                entry.archive_path,
+                entry.original_size,
+                verified_len
+            );
+        }
+        if actual_crc != entry.crc32 {
+            bail!(
+                "verify checksum mismatch for {}: expected {}, got {}",
+                entry.archive_path,
+                entry.crc32,
+                actual_crc
+            );
+        }
+
+        verified_files += 1;
+        verified_bytes += verified_len;
+    }
+
+    Ok(VerificationResult {
+        archive_path: archive_path.to_path_buf(),
+        verified_files,
+        verified_bytes,
     })
 }
 
@@ -660,7 +788,7 @@ fn now_unix() -> u64 {
 mod tests {
     use super::{
         ArchiveManifest, RestoreSelection, create_backup_archive_at, read_archive_manifest,
-        restore_archive, restore_archive_with_selection,
+        restore_archive, restore_archive_with_selection, verify_archive,
     };
     use crate::models::{
         ExclusionRule, InstalledAppRecord, PathStats, PortableAppCandidate, PortableConfidence,
@@ -807,6 +935,7 @@ mod tests {
         let restore = restore_archive(&result.archive_path, &restore_dir).expect("restore archive");
 
         assert_eq!(restore.restored_files, 2);
+        assert_eq!(restore.skipped_existing_files, 0);
         assert_eq!(
             fs::read(restore_dir.join("user/Personal Files/Documents/note.txt"))
                 .expect("read restored note"),
@@ -937,17 +1066,290 @@ mod tests {
             RestoreSelection {
                 restore_user_data: true,
                 restore_portable_apps: false,
+                selected_roots: HashSet::from(["user/Personal Files/Documents".to_string()]),
+                skip_existing_files: false,
             },
         )
         .expect("restore filtered archive");
 
         assert_eq!(restore.restored_files, 1);
+        assert_eq!(restore.skipped_existing_files, 0);
         assert!(
             restore_dir
                 .join("user/Personal Files/Documents/note.txt")
                 .exists()
         );
         assert!(!restore_dir.join("portable/PortableTool/Tool.exe").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_can_limit_to_specific_root() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-restore-root-{unique}"));
+        fs::create_dir_all(&root).expect("create test root");
+        let docs = root.join("Docs");
+        let portable = root.join("PortableTool");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::create_dir_all(&portable).expect("create portable");
+        fs::write(docs.join("note.txt"), b"hello world").expect("write docs");
+        fs::write(portable.join("Tool.exe"), b"exe-bytes").expect("write exe");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![PortableAppCandidate {
+                display_name: "PortableTool".to_string(),
+                root_path: portable.clone(),
+                main_executable: portable.join("Tool.exe"),
+                confidence: PortableConfidence::High,
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 9,
+                },
+                reasons: vec!["portable".to_string()],
+            }],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files",
+                label: "Documents",
+                path: docs.clone(),
+                reason: "Test documents",
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 11,
+                },
+            }],
+            exclusion_rules: vec![],
+        };
+
+        let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
+        let selected_portable_apps = HashSet::from([portable.display().to_string().to_lowercase()]);
+        let archive_dir = root.join("archive");
+        let restore_dir = root.join("restore");
+
+        let result = create_backup_archive_at(
+            &preview,
+            &selected_user_roots,
+            &selected_portable_apps,
+            &archive_dir,
+        )
+        .expect("create archive");
+        let restore = restore_archive_with_selection(
+            &result.archive_path,
+            &restore_dir,
+            RestoreSelection {
+                restore_user_data: true,
+                restore_portable_apps: true,
+                selected_roots: HashSet::from(["portable/PortableTool".to_string()]),
+                skip_existing_files: false,
+            },
+        )
+        .expect("restore selected root");
+
+        assert_eq!(restore.restored_files, 1);
+        assert_eq!(restore.skipped_existing_files, 0);
+        assert!(
+            !restore_dir
+                .join("user/Personal Files/Documents/note.txt")
+                .exists()
+        );
+        assert!(restore_dir.join("portable/PortableTool/Tool.exe").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_can_skip_existing_files() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-skip-existing-{unique}"));
+        fs::create_dir_all(&root).expect("create test root");
+        let docs = root.join("Docs");
+        let portable = root.join("PortableTool");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::create_dir_all(&portable).expect("create portable");
+        fs::write(docs.join("note.txt"), b"hello world").expect("write docs");
+        fs::write(portable.join("Tool.exe"), b"exe-bytes").expect("write exe");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![PortableAppCandidate {
+                display_name: "PortableTool".to_string(),
+                root_path: portable.clone(),
+                main_executable: portable.join("Tool.exe"),
+                confidence: PortableConfidence::High,
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 9,
+                },
+                reasons: vec!["portable".to_string()],
+            }],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files",
+                label: "Documents",
+                path: docs.clone(),
+                reason: "Test documents",
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 11,
+                },
+            }],
+            exclusion_rules: vec![],
+        };
+
+        let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
+        let selected_portable_apps = HashSet::from([portable.display().to_string().to_lowercase()]);
+        let archive_dir = root.join("archive");
+        let restore_dir = root.join("restore");
+        fs::create_dir_all(restore_dir.join("portable/PortableTool")).expect("create restore dir");
+        fs::write(
+            restore_dir.join("portable/PortableTool/Tool.exe"),
+            b"existing",
+        )
+        .expect("write existing file");
+
+        let result = create_backup_archive_at(
+            &preview,
+            &selected_user_roots,
+            &selected_portable_apps,
+            &archive_dir,
+        )
+        .expect("create archive");
+        let restore = restore_archive_with_selection(
+            &result.archive_path,
+            &restore_dir,
+            RestoreSelection {
+                restore_user_data: true,
+                restore_portable_apps: true,
+                selected_roots: HashSet::from([
+                    "user/Personal Files/Documents".to_string(),
+                    "portable/PortableTool".to_string(),
+                ]),
+                skip_existing_files: true,
+            },
+        )
+        .expect("restore with skip existing");
+
+        assert_eq!(restore.restored_files, 1);
+        assert_eq!(restore.skipped_existing_files, 1);
+        assert_eq!(
+            fs::read(restore_dir.join("portable/PortableTool/Tool.exe"))
+                .expect("read existing preserved file"),
+            b"existing"
+        );
+        assert!(
+            restore_dir
+                .join("user/Personal Files/Documents/note.txt")
+                .exists()
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_with_empty_selected_roots_restores_nothing() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-empty-selection-{unique}"));
+        fs::create_dir_all(&root).expect("create test root");
+        let docs = root.join("Docs");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::write(docs.join("note.txt"), b"hello").expect("write docs");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files",
+                label: "Documents",
+                path: docs.clone(),
+                reason: "Test documents",
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 5,
+                },
+            }],
+            exclusion_rules: vec![],
+        };
+
+        let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
+        let result = create_backup_archive_at(
+            &preview,
+            &selected_user_roots,
+            &HashSet::new(),
+            &root.join("archive"),
+        )
+        .expect("create archive");
+        let error = restore_archive_with_selection(
+            &result.archive_path,
+            &root.join("restore"),
+            RestoreSelection {
+                restore_user_data: true,
+                restore_portable_apps: false,
+                selected_roots: HashSet::new(),
+                skip_existing_files: false,
+            },
+        )
+        .expect_err("empty selected roots should not restore");
+
+        assert!(error.to_string().contains("does not contain any files"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn verify_archive_confirms_written_contents() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-verify-{unique}"));
+        fs::create_dir_all(&root).expect("create verify test root");
+        let docs = root.join("Docs");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::write(docs.join("note.txt"), b"hello verify").expect("write docs");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files",
+                label: "Documents",
+                path: docs.clone(),
+                reason: "Test documents",
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 12,
+                },
+            }],
+            exclusion_rules: vec![],
+        };
+
+        let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
+        let result = create_backup_archive_at(
+            &preview,
+            &selected_user_roots,
+            &HashSet::new(),
+            &root.join("archive"),
+        )
+        .expect("create archive");
+        let verification = verify_archive(&result.archive_path).expect("verify archive");
+
+        assert_eq!(verification.verified_files, 1);
+        assert_eq!(verification.verified_bytes, 12);
 
         let _ = fs::remove_dir_all(root);
     }

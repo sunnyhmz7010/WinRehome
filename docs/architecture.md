@@ -20,16 +20,18 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 - Portable application candidate discovery from curated search roots
 - Desktop preview UI with reviewable backup-plan estimates
 - Single-file `.wrh` archive writing with manifest validation
-- Basic `.wrh` restore flow to a target directory with size and CRC checks
+- `.wrh` archive verification before restore with size and CRC checks
+- Restore to a target directory with category toggles and root-level selection
+- Restore conflict handling with fail-on-conflict by default and explicit skip-existing mode
 - Local config persistence for saved selections and restore targets
-- Category-level restore selection for user data vs. portable apps
+- Recent archive discovery for faster reopen and retry flows
 
 ### Deliberately deferred
 
 - Full-disk intelligent scanning
 - Incremental block deduplication
 - Shadow copy support for locked files
-- Fine-grained restore conflict handling beyond current fail-on-conflict behavior
+- In-place merge or overwrite policies beyond the current explicit fail-or-skip behavior
 
 ## Archive design target
 
@@ -37,6 +39,7 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 - `WRH1` header plus manifest footer
 - Per-file metadata with source path, archive path, offsets, sizes, and CRC32
 - Deflate compression per file in the current prototype
+- Restore selection is driven by manifest root prefixes instead of per-file UI state
 - Optional future content-defined chunking for deduplication
 
 ## Why `eframe/egui` first
