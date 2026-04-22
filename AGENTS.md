@@ -111,6 +111,7 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - Restore UX may offer category-level restore, but safety checks must stay the same regardless of scope.
 - Empty explicit restore-root selection means restore nothing; only the plain full-restore entrypoint should restore all manifest roots by default.
 - Skip-existing restore behavior must remain opt-in and must report how many files were skipped.
+- Restore must reject archive entry paths that attempt to escape the chosen destination root.
 - If archive format behavior changes, document compatibility expectations in `docs/architecture.md`.
 
 ### Repository Release Conventions

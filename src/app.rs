@@ -36,24 +36,31 @@ impl WinRehomeApp {
             ..Self::default()
         };
         if let Ok(Some(saved)) = config::load_config() {
+            let saved_restore_user_data = saved.restore_user_data;
+            let saved_restore_portable_apps = saved.restore_portable_apps;
+            let saved_skip_existing_restore_files = saved.skip_existing_restore_files;
+            let saved_selected_restore_roots = saved.selected_restore_roots.clone();
             app.selected_user_roots = config::normalize_existing_paths(&saved.selected_user_roots);
             app.selected_portable_apps =
                 config::normalize_existing_paths(&saved.selected_portable_apps);
             app.archive_path_input = saved.last_archive_path.unwrap_or_default();
             app.restore_destination_input = saved.last_restore_destination.unwrap_or_default();
-            app.restore_user_data = saved.restore_user_data;
-            app.restore_portable_apps = saved.restore_portable_apps;
-            app.selected_restore_roots = saved.selected_restore_roots.clone();
-            app.skip_existing_restore_files = saved.skip_existing_restore_files;
+            app.restore_user_data = saved_restore_user_data;
+            app.restore_portable_apps = saved_restore_portable_apps;
+            app.selected_restore_roots = saved_selected_restore_roots.clone();
+            app.skip_existing_restore_files = saved_skip_existing_restore_files;
 
             if !app.archive_path_input.trim().is_empty() {
                 let saved_restore_destination = app.restore_destination_input.clone();
                 let path = PathBuf::from(app.archive_path_input.trim());
                 if path.exists() {
                     app.load_archive_from_path(path);
+                    app.restore_user_data = saved_restore_user_data;
+                    app.restore_portable_apps = saved_restore_portable_apps;
+                    app.skip_existing_restore_files = saved_skip_existing_restore_files;
                     app.selected_restore_roots = retained_restore_roots(
                         app.loaded_archive.as_ref(),
-                        &saved.selected_restore_roots,
+                        &saved_selected_restore_roots,
                     );
                     if !saved_restore_destination.trim().is_empty() {
                         app.restore_destination_input = saved_restore_destination;

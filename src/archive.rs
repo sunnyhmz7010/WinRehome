@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
@@ -319,7 +319,8 @@ fn restore_archive_with_manifest(
     let mut skipped_existing_files = 0_usize;
 
     for entry in selected_files {
-        let output_path = destination_root.join(Path::new(&entry.archive_path));
+        let relative_restore_path = validate_restore_relative_path(&entry.archive_path)?;
+        let output_path = destination_root.join(&relative_restore_path);
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("failed to create restore directory {}", parent.display())
@@ -381,6 +382,26 @@ fn restore_archive_with_manifest(
         restored_bytes,
         skipped_existing_files,
     })
+}
+
+fn validate_restore_relative_path(archive_path: &str) -> anyhow::Result<PathBuf> {
+    let mut relative = PathBuf::new();
+
+    for component in Path::new(archive_path).components() {
+        match component {
+            Component::Normal(segment) => relative.push(segment),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                bail!("archive entry path escapes restore root: {}", archive_path);
+            }
+        }
+    }
+
+    if relative.as_os_str().is_empty() {
+        bail!("archive entry path is empty: {}", archive_path);
+    }
+
+    Ok(relative)
 }
 
 fn collect_manifest_restore_roots(manifest: &ArchiveManifest) -> HashSet<String> {
@@ -794,7 +815,7 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveManifest, FORMAT_VERSION, RestoreSelection, create_backup_archive_at,
+        ArchiveManifest, FOOTER_MAGIC, FORMAT_VERSION, RestoreSelection, create_backup_archive_at,
         read_archive_manifest, restore_archive, restore_archive_with_selection, verify_archive,
     };
     use crate::models::{
@@ -1422,6 +1443,74 @@ mod tests {
                 .to_string()
                 .contains("Unsupported WinRehome archive format version")
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_restore_path_that_escapes_destination_root() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-escape-path-{unique}"));
+        fs::create_dir_all(&root).expect("create test root");
+        let docs = root.join("Docs");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::write(docs.join("note.txt"), b"hello").expect("write docs");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files",
+                label: "Documents",
+                path: docs.clone(),
+                reason: "Test documents",
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 5,
+                },
+            }],
+            exclusion_rules: vec![],
+        };
+
+        let archive = create_backup_archive_at(
+            &preview,
+            &HashSet::from([docs.display().to_string().to_lowercase()]),
+            &HashSet::new(),
+            &root.join("archive"),
+        )
+        .expect("create archive");
+
+        let bytes = fs::read(&archive.archive_path).expect("read archive bytes");
+        let footer = &bytes[bytes.len() - 20..];
+        let manifest_offset = u64::from_le_bytes(footer[0..8].try_into().expect("footer offset"));
+        let manifest_len = u64::from_le_bytes(footer[8..16].try_into().expect("footer length"));
+        let start = manifest_offset as usize;
+        let end = start + manifest_len as usize;
+        let manifest_bytes = &bytes[start..end];
+        let mut manifest: Value =
+            serde_json::from_slice(manifest_bytes).expect("decode stored manifest");
+        manifest["files"][0]["archive_path"] =
+            json!("user/Personal Files/Documents/../../escaped/note.txt");
+        let patched_manifest =
+            serde_json::to_vec_pretty(&manifest).expect("encode patched manifest");
+
+        let mut patched_bytes = Vec::with_capacity(start + patched_manifest.len() + 20);
+        patched_bytes.extend_from_slice(&bytes[..start]);
+        patched_bytes.extend_from_slice(&patched_manifest);
+        patched_bytes.extend_from_slice(&manifest_offset.to_le_bytes());
+        patched_bytes.extend_from_slice(&(patched_manifest.len() as u64).to_le_bytes());
+        patched_bytes.extend_from_slice(FOOTER_MAGIC);
+        fs::write(&archive.archive_path, &patched_bytes).expect("rewrite archive");
+
+        let restore_root = root.join("restore");
+        let error = restore_archive(&archive.archive_path, &restore_root)
+            .expect_err("restore should reject escaping archive paths");
+        assert!(error.to_string().contains("escapes restore root"));
+        assert!(!root.join("escaped").exists());
 
         let _ = fs::remove_dir_all(root);
     }
