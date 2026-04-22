@@ -1,3 +1,5 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod app;
 mod archive;
 mod config;
@@ -9,6 +11,9 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "WinRehome",
         options,
-        Box::new(|_creation_context| Ok(Box::new(app::WinRehomeApp::new()))),
+        Box::new(|creation_context| {
+            app::configure_egui(&creation_context.egui_ctx);
+            Ok(Box::new(app::WinRehomeApp::new()))
+        }),
     )
 }

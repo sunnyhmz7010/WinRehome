@@ -90,6 +90,7 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - If dependency fetches fail because of proxy settings in this environment, clear proxy variables before retrying `cargo` commands.
 - Do not edit generated files under `target/`.
 - Keep UI code in `src/app.rs`; keep scanning, archive, restore, and config behavior in focused modules.
+- Keep Windows desktop builds GUI-only: preserve the Windows GUI subsystem entry-point behavior and keep a reliable Chinese-capable font fallback configured at startup so release binaries do not show an extra console window or tofu text.
 - Prefer explicit helper names such as `is_known_noise` over vague utility naming.
 - Keep restore selection persistence compatible with manual archive reloads; saved root selections should not be silently discarded when reopening the same archive.
 

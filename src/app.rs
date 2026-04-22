@@ -1,6 +1,7 @@
 use crate::{archive, config, plan};
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, RichText};
 use std::collections::HashSet;
+use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -44,11 +45,13 @@ impl WinRehomeApp {
             restore_portable_apps: true,
             ..Self::default()
         };
+
         if let Ok(Some(saved)) = config::load_config() {
             let saved_restore_user_data = saved.restore_user_data;
             let saved_restore_portable_apps = saved.restore_portable_apps;
             let saved_skip_existing_restore_files = saved.skip_existing_restore_files;
             let saved_selected_restore_roots = saved.selected_restore_roots.clone();
+
             app.selected_user_roots = config::normalize_existing_paths(&saved.selected_user_roots);
             app.selected_portable_apps =
                 config::normalize_existing_paths(&saved.selected_portable_apps);
@@ -78,6 +81,7 @@ impl WinRehomeApp {
                 }
             }
         }
+
         app.recent_archives = archive::list_recent_archives(8).unwrap_or_default();
         app
     }
@@ -164,6 +168,47 @@ impl WinRehomeApp {
     }
 }
 
+pub fn configure_egui(ctx: &egui::Context) {
+    let Some(font_bytes) = load_windows_cjk_font() else {
+        return;
+    };
+
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        "winrehome-cjk".to_string(),
+        FontData::from_owned(font_bytes).into(),
+    );
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .insert(0, "winrehome-cjk".to_string());
+    fonts
+        .families
+        .entry(FontFamily::Monospace)
+        .or_default()
+        .push("winrehome-cjk".to_string());
+    ctx.set_fonts(fonts);
+}
+
+fn load_windows_cjk_font() -> Option<Vec<u8>> {
+    const CANDIDATES: &[&str] = &[
+        "C:\\Windows\\Fonts\\simhei.ttf",
+        "C:\\Windows\\Fonts\\simsunb.ttf",
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\msyhbd.ttc",
+        "C:\\Windows\\Fonts\\simsun.ttc",
+    ];
+
+    for path in CANDIDATES {
+        if let Ok(bytes) = fs::read(path) {
+            return Some(bytes);
+        }
+    }
+
+    None
+}
+
 impl eframe::App for WinRehomeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -201,10 +246,7 @@ impl eframe::App for WinRehomeApp {
 
             if let Some(error) = &self.last_error {
                 ui.add_space(10.0);
-                ui.colored_label(
-                    Color32::from_rgb(200, 40, 40),
-                    format!("Operation failed: {error}"),
-                );
+                ui.colored_label(Color32::from_rgb(200, 40, 40), format!("操作失败：{error}"));
             }
 
             if let Some(result) = &self.last_archive {
@@ -313,12 +355,14 @@ impl eframe::App for WinRehomeApp {
                         loaded.manifest.selected_user_roots.len(),
                         loaded.manifest.selected_portable_apps.len()
                     ));
+
                     let effective_restore_roots = effective_restore_roots(
                         &loaded,
                         self.restore_user_data,
                         self.restore_portable_apps,
                         &self.selected_restore_roots,
                     );
+
                     ui.horizontal(|ui| {
                         if ui
                             .checkbox(&mut self.restore_user_data, "恢复个人文件")
@@ -339,6 +383,7 @@ impl eframe::App for WinRehomeApp {
                             let _ = self.persist_config();
                         }
                     });
+
                     ui.collapsing("归档内容", |ui| {
                         let all_restore_roots = collect_restore_roots(&loaded);
                         ui.horizontal(|ui| {
@@ -357,6 +402,7 @@ impl eframe::App for WinRehomeApp {
                             }
                         });
                         ui.add_space(4.0);
+
                         if !loaded.manifest.selected_user_roots.is_empty() {
                             ui.label(RichText::new("个人文件目录").strong());
                             for root in &loaded.manifest.selected_user_roots {
@@ -374,6 +420,7 @@ impl eframe::App for WinRehomeApp {
                             }
                             ui.add_space(6.0);
                         }
+
                         if !loaded.manifest.selected_portable_apps.is_empty() {
                             ui.label(RichText::new("便携软件").strong());
                             for app in &loaded.manifest.selected_portable_apps {
@@ -391,6 +438,7 @@ impl eframe::App for WinRehomeApp {
                             }
                         }
                     });
+
                     let restore_summary =
                         build_restore_preview_summary(&loaded, &effective_restore_roots);
                     ui.group(|ui| {
@@ -419,6 +467,7 @@ impl eframe::App for WinRehomeApp {
                             ui.small("默认遇到同名文件会停止恢复，不会静默覆盖。");
                         }
                     });
+
                     ui.horizontal(|ui| {
                         if ui.button("校验归档").clicked() {
                             match archive::verify_archive(&loaded.path) {
@@ -432,6 +481,7 @@ impl eframe::App for WinRehomeApp {
                                 }
                             }
                         }
+
                         ui.label("恢复到");
                         if ui
                             .text_edit_singleline(&mut self.restore_destination_input)
@@ -445,6 +495,7 @@ impl eframe::App for WinRehomeApp {
                                 let _ = self.persist_config();
                             }
                         }
+
                         let can_restore = !self.restore_destination_input.trim().is_empty()
                             && restore_summary.selected_file_count > 0;
                         if ui
@@ -470,6 +521,7 @@ impl eframe::App for WinRehomeApp {
                                     },
                                 )
                             };
+
                             match restore_result {
                                 Ok(result) => {
                                     self.last_restore = Some(result);
@@ -484,6 +536,7 @@ impl eframe::App for WinRehomeApp {
                             }
                         }
                     });
+
                     if self.restore_destination_input.trim().is_empty() {
                         ui.small("请先选择恢复目标目录。");
                     } else if restore_summary.selected_file_count == 0 {
