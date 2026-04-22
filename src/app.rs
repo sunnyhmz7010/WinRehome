@@ -1,4 +1,4 @@
-use crate::{archive, plan};
+use crate::{archive, config, plan};
 use eframe::egui::{self, Color32, RichText};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -23,9 +23,42 @@ pub struct WinRehomeApp {
 }
 
 impl WinRehomeApp {
+    pub fn new() -> Self {
+        let mut app = Self::default();
+        if let Ok(Some(saved)) = config::load_config() {
+            app.selected_user_roots = config::normalize_existing_paths(&saved.selected_user_roots);
+            app.selected_portable_apps =
+                config::normalize_existing_paths(&saved.selected_portable_apps);
+            app.archive_path_input = saved.last_archive_path.unwrap_or_default();
+            app.restore_destination_input = saved.last_restore_destination.unwrap_or_default();
+        }
+        app
+    }
+
     fn load_preview(&mut self, preview: plan::BackupPreview) {
-        self.selected_user_roots = preview.default_user_root_keys();
-        self.selected_portable_apps = preview.default_portable_keys();
+        let saved_user_roots: HashSet<String> = preview
+            .user_data_roots
+            .iter()
+            .map(|root| plan::path_key(&root.path))
+            .filter(|key| self.selected_user_roots.contains(key))
+            .collect();
+        let saved_portable_apps: HashSet<String> = preview
+            .portable_candidates
+            .iter()
+            .map(|candidate| plan::path_key(&candidate.root_path))
+            .filter(|key| self.selected_portable_apps.contains(key))
+            .collect();
+
+        self.selected_user_roots = if saved_user_roots.is_empty() {
+            preview.default_user_root_keys()
+        } else {
+            saved_user_roots
+        };
+        self.selected_portable_apps = if saved_portable_apps.is_empty() {
+            preview.default_portable_keys()
+        } else {
+            saved_portable_apps
+        };
         self.preview = Some(preview);
         self.last_error = None;
     }
@@ -40,6 +73,7 @@ impl WinRehomeApp {
                 self.loaded_archive = Some(LoadedArchive { path, manifest });
                 self.last_restore = None;
                 self.last_error = None;
+                let _ = self.persist_config();
             }
             Err(error) => {
                 self.loaded_archive = None;
@@ -56,6 +90,17 @@ impl WinRehomeApp {
         self.last_archive = None;
         self.last_restore = None;
         self.last_error = None;
+    }
+
+    fn persist_config(&self) -> anyhow::Result<PathBuf> {
+        config::save_config(&config::AppConfig {
+            selected_user_roots: self.selected_user_roots.clone(),
+            selected_portable_apps: self.selected_portable_apps.clone(),
+            last_archive_path: (!self.archive_path_input.trim().is_empty())
+                .then(|| self.archive_path_input.trim().to_string()),
+            last_restore_destination: (!self.restore_destination_input.trim().is_empty())
+                .then(|| self.restore_destination_input.trim().to_string()),
+        })
     }
 }
 
@@ -188,6 +233,7 @@ impl eframe::App for WinRehomeApp {
                                 Ok(result) => {
                                     self.last_restore = Some(result);
                                     self.last_error = None;
+                                    let _ = self.persist_config();
                                 }
                                 Err(error) => {
                                     self.last_restore = None;
@@ -230,11 +276,13 @@ impl eframe::App for WinRehomeApp {
                     if ui.button("Use Recommended").clicked() {
                         self.selected_user_roots = preview.default_user_root_keys();
                         self.selected_portable_apps = preview.default_portable_keys();
+                        let _ = self.persist_config();
                     }
 
                     if ui.button("Clear Selections").clicked() {
                         self.selected_user_roots.clear();
                         self.selected_portable_apps.clear();
+                        let _ = self.persist_config();
                     }
 
                     if ui.button("Create Backup Archive").clicked() {
@@ -248,6 +296,7 @@ impl eframe::App for WinRehomeApp {
                                 self.last_archive = Some(result);
                                 self.last_restore = None;
                                 self.last_error = None;
+                                let _ = self.persist_config();
                             }
                             Err(error) => {
                                 self.last_archive = None;
@@ -302,6 +351,7 @@ impl eframe::App for WinRehomeApp {
                                         } else {
                                             self.selected_portable_apps.insert(key.clone());
                                         }
+                                        let _ = self.persist_config();
                                     }
                                     ui.small(format!("Confidence: {}", item.confidence_label()));
                                     ui.small(format!("Root: {}", item.root_path.display()));
@@ -344,6 +394,7 @@ impl eframe::App for WinRehomeApp {
                                         } else {
                                             self.selected_user_roots.remove(&key);
                                         }
+                                        let _ = self.persist_config();
                                     }
                                     ui.small(format!("Category: {}", root.category));
                                     ui.small(format!("Path: {}", root.path.display()));
