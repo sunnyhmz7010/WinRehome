@@ -26,6 +26,8 @@ These rules are intentionally written in a reusable way so they can be copied in
 - Release notes are user-facing change logs. Do not include internal verification/process statements such as having run tests, builds, audits, or CI checks unless explicitly requested.
 - When repository structure, commands, external capabilities, release process, or recurring engineering pitfalls change, update `AGENTS.md` in the same task. Keeping this file current is required, not optional.
 - If newly learned guidance appears to be reusable across repositories rather than specific to the current project, ask whether to automatically scan other project `AGENTS.md` files, apply the shared rule where appropriate, and push those updates to their remotes.
+- For GitHub-hosted repositories, maintain the baseline repository-governance files consistently across projects unless the user explicitly asks for divergence. This baseline includes `LICENSE`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue templates, and similar repo-health/community files.
+- If one of those GitHub governance files is added, removed, or materially changed in a way that should become the new shared baseline, ask whether to propagate the same change across other GitHub repositories and push the updates.
 
 ### Security And Review
 
@@ -69,6 +71,8 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - `src/config.rs`: persisted app configuration and saved selections
 - `docs/architecture.md`: architecture and reliability notes
 - `.github/workflows/cd.yaml`: GitHub Release build and asset upload workflow
+- `.github/ISSUE_TEMPLATE/`: issue intake templates
+- `SECURITY.md`: security reporting and support policy
 - `README.md`: user-facing project page
 
 ### Repository Development Notes
