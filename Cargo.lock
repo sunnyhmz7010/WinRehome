@@ -4001,7 +4001,7 @@ dependencies = [
 
 [[package]]
 name = "winrehome"
-version = "0.1.0-beta.2"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "crc32fast",
