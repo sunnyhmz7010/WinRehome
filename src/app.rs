@@ -19,9 +19,20 @@ struct RestorePreviewSummary {
     selected_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum WorkspaceView {
+    #[default]
+    Overview,
+    ScanPlan,
+    Restore,
+}
+
 #[derive(Default)]
 pub struct WinRehomeApp {
+    active_workspace: WorkspaceView,
     preview: Option<plan::BackupPreview>,
+    scan_filter: String,
+    restore_filter: String,
     selected_user_roots: HashSet<String>,
     selected_portable_apps: HashSet<String>,
     archive_path_input: String,
@@ -111,6 +122,8 @@ impl WinRehomeApp {
             saved_portable_apps
         };
         self.preview = Some(preview);
+        self.scan_filter.clear();
+        self.active_workspace = WorkspaceView::ScanPlan;
         self.last_error = None;
     }
 
@@ -124,6 +137,8 @@ impl WinRehomeApp {
                 let loaded = LoadedArchive { path, manifest };
                 self.selected_restore_roots = collect_restore_roots(&loaded);
                 self.loaded_archive = Some(loaded);
+                self.restore_filter.clear();
+                self.active_workspace = WorkspaceView::Restore;
                 self.restore_user_data = true;
                 self.restore_portable_apps = true;
                 self.skip_existing_restore_files = false;
@@ -144,8 +159,14 @@ impl WinRehomeApp {
 
     fn clear_preview(&mut self) {
         self.preview = None;
+        self.scan_filter.clear();
         self.selected_user_roots.clear();
         self.selected_portable_apps.clear();
+        self.active_workspace = if self.loaded_archive.is_some() {
+            WorkspaceView::Restore
+        } else {
+            WorkspaceView::Overview
+        };
         self.last_archive = None;
         self.last_verification = None;
         self.last_restore = None;
@@ -169,35 +190,75 @@ impl WinRehomeApp {
 }
 
 pub fn configure_egui(ctx: &egui::Context) {
-    let Some(font_bytes) = load_windows_cjk_font() else {
-        return;
+    if let Some(font_bytes) = load_windows_cjk_font() {
+        let mut fonts = FontDefinitions::default();
+        fonts.font_data.insert(
+            "winrehome-cjk".to_string(),
+            FontData::from_owned(font_bytes).into(),
+        );
+        fonts
+            .families
+            .entry(FontFamily::Proportional)
+            .or_default()
+            .insert(0, "winrehome-cjk".to_string());
+        fonts
+            .families
+            .entry(FontFamily::Monospace)
+            .or_default()
+            .push("winrehome-cjk".to_string());
+        ctx.set_fonts(fonts);
+    }
+
+    configure_visual_style(ctx);
+}
+
+fn configure_visual_style(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+    style.spacing.item_spacing = egui::vec2(12.0, 10.0);
+    style.spacing.button_padding = egui::vec2(14.0, 10.0);
+    style.spacing.menu_margin = egui::Margin::same(12);
+    style.spacing.window_margin = egui::Margin::same(16);
+    style.spacing.indent = 18.0;
+
+    style.visuals = {
+        let mut visuals = egui::Visuals::light();
+        visuals.override_text_color = Some(Color32::from_rgb(28, 43, 38));
+        visuals.panel_fill = Color32::from_rgb(244, 248, 244);
+        visuals.extreme_bg_color = Color32::from_rgb(234, 241, 236);
+        visuals.window_fill = Color32::from_rgb(252, 253, 250);
+        visuals.window_stroke = egui::Stroke::new(1.0, Color32::from_rgb(202, 214, 205));
+        visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(252, 253, 250);
+        visuals.widgets.noninteractive.bg_stroke =
+            egui::Stroke::new(1.0, Color32::from_rgb(208, 219, 210));
+        visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(18);
+        visuals.widgets.inactive.bg_fill = Color32::from_rgb(245, 249, 246);
+        visuals.widgets.inactive.bg_stroke =
+            egui::Stroke::new(1.0, Color32::from_rgb(181, 202, 188));
+        visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(14);
+        visuals.widgets.hovered.bg_fill = Color32::from_rgb(232, 242, 235);
+        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, Color32::from_rgb(92, 138, 110));
+        visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(14);
+        visuals.widgets.active.bg_fill = Color32::from_rgb(94, 138, 112);
+        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, Color32::from_rgb(68, 107, 84));
+        visuals.widgets.active.fg_stroke = egui::Stroke::new(1.5, Color32::WHITE);
+        visuals.widgets.active.corner_radius = egui::CornerRadius::same(14);
+        visuals.selection.bg_fill = Color32::from_rgb(138, 176, 151);
+        visuals.selection.stroke = egui::Stroke::new(1.0, Color32::from_rgb(58, 91, 72));
+        visuals.hyperlink_color = Color32::from_rgb(62, 110, 148);
+        visuals
     };
 
-    let mut fonts = FontDefinitions::default();
-    fonts.font_data.insert(
-        "winrehome-cjk".to_string(),
-        FontData::from_owned(font_bytes).into(),
-    );
-    fonts
-        .families
-        .entry(FontFamily::Proportional)
-        .or_default()
-        .insert(0, "winrehome-cjk".to_string());
-    fonts
-        .families
-        .entry(FontFamily::Monospace)
-        .or_default()
-        .push("winrehome-cjk".to_string());
-    ctx.set_fonts(fonts);
+    ctx.set_style(style);
 }
 
 fn load_windows_cjk_font() -> Option<Vec<u8>> {
     const CANDIDATES: &[&str] = &[
-        "C:\\Windows\\Fonts\\simhei.ttf",
-        "C:\\Windows\\Fonts\\simsunb.ttf",
         "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\msyhl.ttc",
         "C:\\Windows\\Fonts\\msyhbd.ttc",
         "C:\\Windows\\Fonts\\simsun.ttc",
+        "C:\\Windows\\Fonts\\simhei.ttf",
+        "C:\\Windows\\Fonts\\simsunb.ttf",
     ];
 
     for path in CANDIDATES {
@@ -211,512 +272,1519 @@ fn load_windows_cjk_font() -> Option<Vec<u8>> {
 
 impl eframe::App for WinRehomeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("WinRehome");
-            ui.label("面向 Windows 的迁移备份工具，只保留真正值得迁移的数据。");
-            ui.add_space(8.0);
-
-            ui.horizontal(|ui| {
-                if ui.button("生成预览").clicked() {
-                    match plan::build_preview() {
-                        Ok(preview) => self.load_preview(preview),
-                        Err(error) => {
-                            self.last_archive = None;
-                            self.last_error = Some(error.to_string());
-                        }
-                    }
-                }
-
-                if ui.button("清空").clicked() {
-                    self.clear_preview();
-                }
-            });
-
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(8.0);
-
-            ui.group(|ui| {
-                ui.label(RichText::new("可靠性原则").strong());
-                ui.label("- 已安装软件只记录，不打包程序本体。");
-                ui.label("- 便携软件只是候选项，确认后才会进入归档。");
-                ui.label("- 个人文件采用白名单思路，不靠“排除 Program Files”这种粗规则。");
-                ui.label("- 缓存、临时文件、日志和构建产物默认排除。");
-            });
-
-            if let Some(error) = &self.last_error {
-                ui.add_space(10.0);
-                ui.colored_label(Color32::from_rgb(200, 40, 40), format!("操作失败：{error}"));
-            }
-
-            if let Some(result) = &self.last_archive {
-                ui.add_space(10.0);
-                ui.colored_label(
-                    Color32::from_rgb(35, 120, 70),
-                    format!(
-                        "归档已创建：{}（{} 个文件，原始大小 {}，归档大小 {}）",
-                        result.archive_path.display(),
-                        result.file_count,
-                        format_bytes(result.original_bytes),
-                        format_bytes(result.stored_bytes)
-                    ),
-                );
-            }
-
-            if let Some(result) = &self.last_restore {
-                ui.add_space(10.0);
-                ui.colored_label(
-                    Color32::from_rgb(45, 95, 175),
-                    format!(
-                        "归档已恢复：{} -> {}（{} 个文件，{}，跳过 {} 个已存在文件）",
-                        result.archive_path.display(),
-                        result.destination_root.display(),
-                        result.restored_files,
-                        format_bytes(result.restored_bytes),
-                        result.skipped_existing_files
-                    ),
-                );
-            }
-
-            if let Some(result) = &self.last_verification {
-                ui.add_space(10.0);
-                ui.colored_label(
-                    Color32::from_rgb(110, 85, 190),
-                    format!(
-                        "归档校验完成：{}（{} 个文件，{}）",
-                        result.archive_path.display(),
-                        result.verified_files,
-                        format_bytes(result.verified_bytes)
-                    ),
-                );
-            }
-
-            ui.add_space(10.0);
-            ui.separator();
-            ui.add_space(10.0);
-            ui.group(|ui| {
-                ui.label(RichText::new("归档恢复").strong());
-                ui.horizontal(|ui| {
-                    if ui.button("加载最新归档").clicked() {
-                        match archive::find_latest_archive() {
-                            Ok(Some(path)) => self.load_archive_from_path(path),
-                            Ok(None) => {
-                                self.loaded_archive = None;
-                                self.last_verification = None;
-                                self.last_restore = None;
-                                self.last_error =
-                                    Some("默认备份目录中没有找到 .wrh 归档。".to_string());
-                            }
-                            Err(error) => {
-                                self.loaded_archive = None;
-                                self.last_verification = None;
-                                self.last_restore = None;
-                                self.last_error = Some(error.to_string());
-                            }
-                        }
-                    }
-
-                    ui.label("归档路径");
-                    if ui
-                        .text_edit_singleline(&mut self.archive_path_input)
-                        .changed()
-                    {
-                        let _ = self.persist_config();
-                    }
-                    if ui.button("加载归档").clicked() {
-                        let path = PathBuf::from(self.archive_path_input.trim());
-                        self.load_archive_from_path(path);
-                    }
-                });
-
-                if !self.recent_archives.is_empty() {
-                    ui.collapsing("最近归档", |ui| {
-                        for path in self.recent_archives.clone() {
-                            if ui.button(path.display().to_string()).clicked() {
-                                self.load_archive_from_path(path);
-                            }
-                        }
-                    });
-                }
-
-                if let Some(loaded) = self.loaded_archive.clone() {
-                    ui.add_space(8.0);
-                    ui.label(format!("当前归档：{}", loaded.path.display()));
-                    ui.label(format!(
-                        "创建时间：{} | 文件数：{} | 原始大小：{} | 归档大小：{}",
-                        loaded.manifest.created_at_unix,
-                        loaded.manifest.files.len(),
-                        format_bytes(loaded.manifest.original_bytes),
-                        format_bytes(loaded.manifest.stored_bytes)
-                    ));
-                    ui.label(format!(
-                        "已安装软件记录：{} | 用户目录：{} | 便携软件：{}",
-                        loaded.manifest.installed_apps.len(),
-                        loaded.manifest.selected_user_roots.len(),
-                        loaded.manifest.selected_portable_apps.len()
-                    ));
-
-                    let effective_restore_roots = effective_restore_roots(
-                        &loaded,
-                        self.restore_user_data,
-                        self.restore_portable_apps,
-                        &self.selected_restore_roots,
-                    );
-
-                    ui.horizontal(|ui| {
-                        if ui
-                            .checkbox(&mut self.restore_user_data, "恢复个人文件")
-                            .changed()
-                        {
-                            let _ = self.persist_config();
-                        }
-                        if ui
-                            .checkbox(&mut self.restore_portable_apps, "恢复便携软件")
-                            .changed()
-                        {
-                            let _ = self.persist_config();
-                        }
-                        if ui
-                            .checkbox(&mut self.skip_existing_restore_files, "跳过已存在文件")
-                            .changed()
-                        {
-                            let _ = self.persist_config();
-                        }
-                    });
-
-                    ui.collapsing("归档内容", |ui| {
-                        let all_restore_roots = collect_restore_roots(&loaded);
+        egui::TopBottomPanel::top("hero_panel")
+            .exact_height(152.0)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(224, 237, 227))
+                    .stroke(egui::Stroke::new(1.0, Color32::from_rgb(175, 198, 181)))
+                    .inner_margin(egui::Margin::symmetric(22, 16))
+                    .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.small(format!(
-                                "已选根目录：{} / {}",
-                                self.selected_restore_roots.len(),
-                                all_restore_roots.len()
-                            ));
-                            if ui.button("全部选择").clicked() {
-                                self.selected_restore_roots = all_restore_roots.clone();
-                                let _ = self.persist_config();
-                            }
-                            if ui.button("全部清空").clicked() {
-                                self.selected_restore_roots.clear();
-                                let _ = self.persist_config();
-                            }
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    RichText::new("WinRehome")
+                                        .size(26.0)
+                                        .strong()
+                                        .color(Color32::from_rgb(24, 45, 36)),
+                                );
+                                ui.label(
+                                    RichText::new(
+                                        "一个尽量节省空间的 Windows 迁移备份工具，只保留真正值得迁移的数据。",
+                                    )
+                                    .color(Color32::from_rgb(72, 96, 82)),
+                                );
+                                ui.add_space(8.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    flow_chip(ui, "扫描", self.preview.is_some());
+                                    flow_chip(
+                                        ui,
+                                        "审查",
+                                        self.preview.is_some()
+                                            && (!self.selected_user_roots.is_empty()
+                                                || !self.selected_portable_apps.is_empty()),
+                                    );
+                                    flow_chip(ui, "归档", self.last_archive.is_some());
+                                    flow_chip(ui, "恢复", self.loaded_archive.is_some());
+                                });
+                                ui.small(format!(
+                                    "当前阶段：{}",
+                                    current_stage_label(
+                                        self.preview.is_some(),
+                                        self.loaded_archive.is_some()
+                                    )
+                                ));
+                            });
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.add(secondary_action_button("加载最新归档")).clicked() {
+                                        match archive::find_latest_archive() {
+                                            Ok(Some(path)) => self.load_archive_from_path(path),
+                                            Ok(None) => {
+                                                self.loaded_archive = None;
+                                                self.last_verification = None;
+                                                self.last_restore = None;
+                                                self.last_error = Some(
+                                                    "默认备份目录中没有找到 .wrh 归档。".to_string(),
+                                                );
+                                            }
+                                            Err(error) => {
+                                                self.loaded_archive = None;
+                                                self.last_verification = None;
+                                                self.last_restore = None;
+                                                self.last_error = Some(error.to_string());
+                                            }
+                                        }
+                                    }
+
+                                    if ui.add(secondary_action_button("清空选择")).clicked() {
+                                        self.clear_preview();
+                                    }
+
+                                    if ui.add(primary_action_button("生成扫描预览")).clicked() {
+                                        match plan::build_preview() {
+                                            Ok(preview) => self.load_preview(preview),
+                                            Err(error) => {
+                                                self.last_archive = None;
+                                                self.last_error = Some(error.to_string());
+                                            }
+                                        }
+                                    }
+                                },
+                            );
                         });
-                        ui.add_space(4.0);
-
-                        if !loaded.manifest.selected_user_roots.is_empty() {
-                            ui.label(RichText::new("个人文件目录").strong());
-                            for root in &loaded.manifest.selected_user_roots {
-                                let key = user_restore_root_key(root);
-                                let mut selected = self.selected_restore_roots.contains(&key);
-                                if ui.checkbox(&mut selected, &root.label).changed() {
-                                    if selected {
-                                        self.selected_restore_roots.insert(key.clone());
-                                    } else {
-                                        self.selected_restore_roots.remove(&key);
-                                    }
-                                    let _ = self.persist_config();
-                                }
-                                ui.small(format!("路径：{}", root.path));
-                            }
-                            ui.add_space(6.0);
-                        }
-
-                        if !loaded.manifest.selected_portable_apps.is_empty() {
-                            ui.label(RichText::new("便携软件").strong());
-                            for app in &loaded.manifest.selected_portable_apps {
-                                let key = portable_restore_root_key(app);
-                                let mut selected = self.selected_restore_roots.contains(&key);
-                                if ui.checkbox(&mut selected, &app.display_name).changed() {
-                                    if selected {
-                                        self.selected_restore_roots.insert(key.clone());
-                                    } else {
-                                        self.selected_restore_roots.remove(&key);
-                                    }
-                                    let _ = self.persist_config();
-                                }
-                                ui.small(format!("路径：{}", app.root_path));
-                            }
-                        }
                     });
-
-                    let restore_summary =
-                        build_restore_preview_summary(&loaded, &effective_restore_roots);
-                    ui.group(|ui| {
-                        ui.label(RichText::new("恢复摘要").strong());
-                        ui.label(format!(
-                            "已选个人目录：{} | 已选便携软件：{}",
-                            restore_summary.selected_user_root_count,
-                            restore_summary.selected_portable_app_count
-                        ));
-                        ui.label(format!(
-                            "预计恢复文件：{} | 预计恢复大小：{}",
-                            restore_summary.selected_file_count,
-                            format_bytes(restore_summary.selected_bytes)
-                        ));
-                        if self.restore_destination_input.trim().is_empty() {
-                            ui.small("目标目录尚未填写。");
-                        } else {
-                            ui.small(format!(
-                                "目标目录：{}",
-                                self.restore_destination_input.trim()
-                            ));
-                        }
-                        if self.skip_existing_restore_files {
-                            ui.small("已启用“跳过已存在文件”，恢复时会保留目标目录里的同名文件。");
-                        } else {
-                            ui.small("默认遇到同名文件会停止恢复，不会静默覆盖。");
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
-                        if ui.button("校验归档").clicked() {
-                            match archive::verify_archive(&loaded.path) {
-                                Ok(result) => {
-                                    self.last_verification = Some(result);
-                                    self.last_error = None;
-                                }
-                                Err(error) => {
-                                    self.last_verification = None;
-                                    self.last_error = Some(error.to_string());
-                                }
-                            }
-                        }
-
-                        ui.label("恢复到");
-                        if ui
-                            .text_edit_singleline(&mut self.restore_destination_input)
-                            .changed()
-                        {
-                            let _ = self.persist_config();
-                        }
-                        if ui.button("使用默认恢复目录").clicked() {
-                            if let Ok(path) = archive::default_restore_dir(&loaded.path) {
-                                self.restore_destination_input = path.display().to_string();
-                                let _ = self.persist_config();
-                            }
-                        }
-
-                        let can_restore = !self.restore_destination_input.trim().is_empty()
-                            && restore_summary.selected_file_count > 0;
-                        if ui
-                            .add_enabled(can_restore, egui::Button::new("开始恢复"))
-                            .clicked()
-                        {
-                            let destination = PathBuf::from(self.restore_destination_input.trim());
-                            let use_default_restore = self.restore_user_data
-                                && self.restore_portable_apps
-                                && !self.skip_existing_restore_files
-                                && self.selected_restore_roots == collect_restore_roots(&loaded);
-                            let restore_result = if use_default_restore {
-                                archive::restore_archive(&loaded.path, &destination)
-                            } else {
-                                archive::restore_archive_with_selection(
-                                    &loaded.path,
-                                    &destination,
-                                    archive::RestoreSelection {
-                                        restore_user_data: self.restore_user_data,
-                                        restore_portable_apps: self.restore_portable_apps,
-                                        selected_roots: effective_restore_roots.clone(),
-                                        skip_existing_files: self.skip_existing_restore_files,
-                                    },
-                                )
-                            };
-
-                            match restore_result {
-                                Ok(result) => {
-                                    self.last_restore = Some(result);
-                                    self.last_verification = None;
-                                    self.last_error = None;
-                                    let _ = self.persist_config();
-                                }
-                                Err(error) => {
-                                    self.last_restore = None;
-                                    self.last_error = Some(error.to_string());
-                                }
-                            }
-                        }
-                    });
-
-                    if self.restore_destination_input.trim().is_empty() {
-                        ui.small("请先选择恢复目标目录。");
-                    } else if restore_summary.selected_file_count == 0 {
-                        ui.small("请至少选择一个已启用的恢复根目录。");
-                    } else {
-                        ui.small(format!(
-                            "已准备恢复 {} 个根目录中的 {} 个文件。",
-                            restore_summary.selected_root_count,
-                            restore_summary.selected_file_count
-                        ));
-                    }
-                }
             });
 
-            if let Some(preview) = self.preview.clone() {
-                let summary = preview
-                    .summarize_selection(&self.selected_user_roots, &self.selected_portable_apps);
+        egui::SidePanel::left("overview_panel")
+            .resizable(false)
+            .exact_width(236.0)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        card_panel(
+                            ui,
+                            "当前阶段",
+                            "先扫描，再审查，再归档，最后恢复。",
+                            |ui| {
+                                ui.label(format!(
+                                    "当前工作：{}",
+                                    current_stage_label(
+                                        self.preview.is_some(),
+                                        self.loaded_archive.is_some()
+                                    )
+                                ));
+                                if let Some(preview) = &self.preview {
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(231, 240, 233),
+                                        "已发现候选",
+                                        &format!(
+                                            "{} 目录 / {} 便携 / {} 软件",
+                                            preview.user_data_roots.len(),
+                                            preview.portable_candidates.len(),
+                                            preview.installed_apps.len()
+                                        ),
+                                    );
+                                } else if let Some(loaded) = &self.loaded_archive {
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(233, 238, 245),
+                                        "已加载归档",
+                                        &format!(
+                                            "{} 个文件 / {}",
+                                            loaded.manifest.files.len(),
+                                            format_bytes(loaded.manifest.stored_bytes)
+                                        ),
+                                    );
+                                } else {
+                                    ui.small("还没有扫描结果，也没有已加载的归档。");
+                                }
+                            },
+                        );
 
-                ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(10.0);
+                        if let Some(error) = &self.last_error {
+                            status_banner(
+                                ui,
+                                Color32::from_rgb(252, 233, 229),
+                                Color32::from_rgb(212, 122, 102),
+                                &format!("操作失败：{error}"),
+                            );
+                        }
+                        if let Some(result) = &self.last_archive {
+                            status_banner(
+                                ui,
+                                Color32::from_rgb(230, 242, 233),
+                                Color32::from_rgb(102, 150, 113),
+                                &format!(
+                                    "归档已创建：{}\n{} 个文件，原始大小 {}，归档大小 {}。",
+                                    result.archive_path.display(),
+                                    result.file_count,
+                                    format_bytes(result.original_bytes),
+                                    format_bytes(result.stored_bytes)
+                                ),
+                            );
+                        }
+                        if let Some(result) = &self.last_restore {
+                            status_banner(
+                                ui,
+                                Color32::from_rgb(232, 239, 248),
+                                Color32::from_rgb(97, 128, 177),
+                                &format!(
+                                    "归档已恢复：{} -> {}\n{} 个文件，{}，跳过 {} 个已存在文件。",
+                                    result.archive_path.display(),
+                                    result.destination_root.display(),
+                                    result.restored_files,
+                                    format_bytes(result.restored_bytes),
+                                    result.skipped_existing_files
+                                ),
+                            );
+                        }
+                        if let Some(result) = &self.last_verification {
+                            status_banner(
+                                ui,
+                                Color32::from_rgb(241, 235, 250),
+                                Color32::from_rgb(133, 104, 188),
+                                &format!(
+                                    "归档校验完成：{}\n{} 个文件，{}。",
+                                    result.archive_path.display(),
+                                    result.verified_files,
+                                    format_bytes(result.verified_bytes)
+                                ),
+                            );
+                        }
 
-                ui.heading("扫描预览");
-                ui.label(format!("已安装软件记录：{}", preview.installed_apps.len()));
-                ui.label(format!(
-                    "便携软件候选：{}",
-                    preview.portable_candidates.len()
-                ));
-                ui.label(format!("高价值用户目录：{}", preview.user_data_roots.len()));
-                ui.label(format!("全局排除规则：{}", preview.exclusion_rules.len()));
+                        card_panel(
+                            ui,
+                            "可靠性原则",
+                            "默认宁可保守，也不把不该迁移的内容带进归档。",
+                            |ui| {
+                                principle_row(ui, "已安装软件只记录，不打包程序本体");
+                                principle_row(ui, "便携软件先审查，再进入归档");
+                                principle_row(ui, "个人文件按白名单和迁移价值选择");
+                                principle_row(ui, "缓存、临时文件、日志默认排除");
+                            },
+                        );
 
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("使用推荐选择").clicked() {
-                        self.selected_user_roots = preview.default_user_root_keys();
-                        self.selected_portable_apps = preview.default_portable_keys();
-                        let _ = self.persist_config();
+                        if !self.recent_archives.is_empty() {
+                            card_panel(
+                                ui,
+                                "最近归档",
+                                "方便快速重新打开和验证。",
+                                |ui| {
+                                    for path in self.recent_archives.clone().into_iter().take(5) {
+                                        let path_label = path.display().to_string();
+                                        result_card(ui, "归档文件", &path_label, |ui| {
+                                            if ui
+                                                .add(secondary_action_button("加载这个归档"))
+                                                .clicked()
+                                            {
+                                                self.load_archive_from_path(path.clone());
+                                            }
+                                        });
+                                        ui.add_space(6.0);
+                                    }
+                                },
+                            );
+                        }
+                    });
+            });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let resolved_workspace = resolved_workspace(
+                        self.active_workspace,
+                        self.preview.is_some(),
+                        self.loaded_archive.is_some(),
+                    );
+                    workspace_switcher(
+                        ui,
+                        &mut self.active_workspace,
+                        self.preview.is_some(),
+                        self.loaded_archive.is_some(),
+                    );
+                    ui.add_space(10.0);
+
+                    if matches!(resolved_workspace, WorkspaceView::Overview) {
+                        card_panel(
+                            ui,
+                            "总览",
+                            "WinRehome 不做整盘镜像，而是把真正值得迁移的内容整理成单文件归档。",
+                            |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(231, 240, 233),
+                                        "步骤 1",
+                                        "扫描已安装软件、便携候选和高价值用户目录",
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(241, 237, 227),
+                                        "步骤 2",
+                                        "审查候选项，只保留真正值得迁移的内容",
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(233, 238, 245),
+                                        "步骤 3",
+                                        "生成 `.wrh` 归档并在新系统中恢复",
+                                    );
+                                });
+
+                                ui.add_space(12.0);
+                                ui.columns(2, |columns| {
+                                    quick_action_card(
+                                        &mut columns[0],
+                                        "开始新扫描",
+                                        "重新评估当前机器上的个人目录、便携候选和已安装软件记录。",
+                                        "进入扫描计划",
+                                        || {
+                                            match plan::build_preview() {
+                                                Ok(preview) => self.load_preview(preview),
+                                                Err(error) => {
+                                                    self.last_archive = None;
+                                                    self.last_error = Some(error.to_string());
+                                                }
+                                            }
+                                        },
+                                    );
+
+                                    quick_action_card(
+                                        &mut columns[1],
+                                        "打开最近归档",
+                                        "直接进入恢复工作区，查看内容、校验完整性并准备恢复。",
+                                        "加载最新归档",
+                                        || match archive::find_latest_archive() {
+                                            Ok(Some(path)) => self.load_archive_from_path(path),
+                                            Ok(None) => {
+                                                self.loaded_archive = None;
+                                                self.last_verification = None;
+                                                self.last_restore = None;
+                                                self.last_error = Some(
+                                                    "默认备份目录中没有找到 .wrh 归档。".to_string(),
+                                                );
+                                            }
+                                            Err(error) => {
+                                                self.loaded_archive = None;
+                                                self.last_verification = None;
+                                                self.last_restore = None;
+                                                self.last_error = Some(error.to_string());
+                                            }
+                                        },
+                                    );
+                                });
+
+                                if let Some(preview) = &self.preview {
+                                    ui.add_space(10.0);
+                                    ui.label(RichText::new("最近一次扫描").strong());
+                                    ui.horizontal_wrapped(|ui| {
+                                        metric_tile(
+                                            ui,
+                                            Color32::from_rgb(239, 244, 231),
+                                            "用户目录",
+                                            &preview.user_data_roots.len().to_string(),
+                                        );
+                                        metric_tile(
+                                            ui,
+                                            Color32::from_rgb(231, 240, 233),
+                                            "便携候选",
+                                            &preview.portable_candidates.len().to_string(),
+                                        );
+                                        metric_tile(
+                                            ui,
+                                            Color32::from_rgb(233, 238, 245),
+                                            "软件记录",
+                                            &preview.installed_apps.len().to_string(),
+                                        );
+                                    });
+                                }
+                                if let Some(loaded) = &self.loaded_archive {
+                                    ui.add_space(10.0);
+                                    ui.label(RichText::new("当前已加载归档").strong());
+                                    ui.horizontal_wrapped(|ui| {
+                                        metric_tile(
+                                            ui,
+                                            Color32::from_rgb(233, 238, 245),
+                                            "归档文件数",
+                                            &loaded.manifest.files.len().to_string(),
+                                        );
+                                        metric_tile(
+                                            ui,
+                                            Color32::from_rgb(245, 240, 233),
+                                            "归档大小",
+                                            &format_bytes(loaded.manifest.stored_bytes),
+                                        );
+                                        metric_tile(
+                                            ui,
+                                            Color32::from_rgb(240, 247, 241),
+                                            "软件记录",
+                                            &loaded.manifest.installed_apps.len().to_string(),
+                                        );
+                                    });
+                                }
+                            },
+                        );
                     }
 
-                    if ui.button("清空选择").clicked() {
-                        self.selected_user_roots.clear();
-                        self.selected_portable_apps.clear();
-                        let _ = self.persist_config();
-                    }
-
-                    if ui.button("创建备份归档").clicked() {
-                        match archive::create_backup_archive(
-                            &preview,
+                    if matches!(resolved_workspace, WorkspaceView::ScanPlan) {
+                        if let Some(preview) = self.preview.clone() {
+                        let visible_portable_keys: Vec<String> = preview
+                            .portable_candidates
+                            .iter()
+                            .filter_map(|item| {
+                                let root_path = item.root_path.display().to_string();
+                                let main_executable = item.main_executable.display().to_string();
+                                matches_filter(
+                                    &self.scan_filter,
+                                    &[
+                                        &item.display_name,
+                                        &root_path,
+                                        &main_executable,
+                                        item.confidence_label(),
+                                    ],
+                                )
+                                .then(|| plan::path_key(&item.root_path))
+                            })
+                            .collect();
+                        let visible_user_root_keys: Vec<String> = preview
+                            .user_data_roots
+                            .iter()
+                            .filter_map(|root| {
+                                let path = root.path.display().to_string();
+                                matches_filter(
+                                    &self.scan_filter,
+                                    &[root.label, root.category, root.reason, &path],
+                                )
+                                .then(|| plan::path_key(&root.path))
+                            })
+                            .collect();
+                        let filtered_installed_count = preview
+                            .installed_apps
+                            .iter()
+                            .filter(|app| {
+                                matches_filter(
+                                    &self.scan_filter,
+                                    &[
+                                        &app.display_name,
+                                        app.source,
+                                        &app.uninstall_key,
+                                        &app
+                                            .install_location
+                                            .as_ref()
+                                            .map(|path| path.display().to_string())
+                                            .unwrap_or_default(),
+                                    ],
+                                )
+                            })
+                            .count();
+                        let filtered_portable_count = preview
+                            .portable_candidates
+                            .iter()
+                            .filter(|item| {
+                                let root_path = item.root_path.display().to_string();
+                                let main_executable = item.main_executable.display().to_string();
+                                matches_filter(
+                                    &self.scan_filter,
+                                    &[
+                                        &item.display_name,
+                                        &root_path,
+                                        &main_executable,
+                                        item.confidence_label(),
+                                    ],
+                                )
+                            })
+                            .count();
+                        let filtered_user_root_count = preview
+                            .user_data_roots
+                            .iter()
+                            .filter(|root| {
+                                let path = root.path.display().to_string();
+                                matches_filter(
+                                    &self.scan_filter,
+                                    &[root.label, root.category, root.reason, &path],
+                                )
+                            })
+                            .count();
+                        let summary = preview.summarize_selection(
                             &self.selected_user_roots,
                             &self.selected_portable_apps,
-                        ) {
-                            Ok(result) => {
-                                self.load_archive_from_path(result.archive_path.clone());
-                                self.last_archive = Some(result);
-                                self.last_verification = None;
-                                self.last_restore = None;
-                                self.last_error = None;
-                                let _ = self.persist_config();
-                            }
-                            Err(error) => {
-                                self.last_archive = None;
-                                self.loaded_archive = None;
-                                self.last_restore = None;
-                                self.last_error = Some(error.to_string());
-                            }
+                        );
+
+                        card_panel(
+                            ui,
+                            "扫描预览",
+                            "先看清楚迁移范围，再决定哪些内容应该进入归档。",
+                            |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(231, 240, 233),
+                                        "已安装软件记录",
+                                        &preview.installed_apps.len().to_string(),
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(239, 244, 231),
+                                        "便携软件候选",
+                                        &preview.portable_candidates.len().to_string(),
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(233, 238, 245),
+                                        "高价值用户目录",
+                                        &preview.user_data_roots.len().to_string(),
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(245, 240, 233),
+                                        "全局排除规则",
+                                        &preview.exclusion_rules.len().to_string(),
+                                    );
+                                });
+
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui.add(secondary_action_button("使用推荐选择")).clicked() {
+                                        self.selected_user_roots = preview.default_user_root_keys();
+                                        self.selected_portable_apps = preview.default_portable_keys();
+                                        let _ = self.persist_config();
+                                    }
+
+                                    if ui.add(secondary_action_button("清空选择")).clicked() {
+                                        self.selected_user_roots.clear();
+                                        self.selected_portable_apps.clear();
+                                        let _ = self.persist_config();
+                                    }
+
+                                    if ui.add(primary_action_button("创建备份归档")).clicked() {
+                                        match archive::create_backup_archive(
+                                            &preview,
+                                            &self.selected_user_roots,
+                                            &self.selected_portable_apps,
+                                        ) {
+                                            Ok(result) => {
+                                                self.load_archive_from_path(result.archive_path.clone());
+                                                self.last_archive = Some(result);
+                                                self.last_verification = None;
+                                                self.last_restore = None;
+                                                self.last_error = None;
+                                                let _ = self.persist_config();
+                                            }
+                                            Err(error) => {
+                                                self.last_archive = None;
+                                                self.loaded_archive = None;
+                                                self.last_restore = None;
+                                                self.last_error = Some(error.to_string());
+                                            }
+                                        }
+                                    }
+                                });
+
+                                ui.add_space(8.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label("快速筛选");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.scan_filter)
+                                            .hint_text("按软件名、路径或目录名过滤"),
+                                    );
+                                });
+                                if !self.scan_filter.trim().is_empty()
+                                    && filtered_installed_count == 0
+                                    && filtered_portable_count == 0
+                                    && filtered_user_root_count == 0
+                                {
+                                    ui.add_space(8.0);
+                                    compact_empty_state(
+                                        ui,
+                                        "没有匹配结果",
+                                        "当前筛选条件下，没有命中的软件、便携候选或用户目录。",
+                                    );
+                                }
+
+                                ui.add_space(8.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(252, 248, 236),
+                                        "保留的用户目录",
+                                        &summary.selected_user_roots.to_string(),
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(240, 247, 241),
+                                        "保留的便携软件",
+                                        &summary.selected_portable_apps.to_string(),
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(238, 243, 249),
+                                        "预计文件数",
+                                        &summary.total_files.to_string(),
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(245, 240, 233),
+                                        "预计大小",
+                                        &format_bytes(summary.total_bytes),
+                                    );
+                                });
+                            },
+                        );
+
+                        ui.columns(3, |columns| {
+                            card_panel(
+                                &mut columns[0],
+                                "已安装软件",
+                                "这些内容只会被记录进清单，不会被打包。",
+                                |ui| {
+                                    section_counter(ui, "筛选命中", filtered_installed_count);
+                                    ui.add_space(8.0);
+                                    if filtered_installed_count == 0 {
+                                        compact_empty_state(
+                                            ui,
+                                            "没有命中的软件记录",
+                                            "可以调整筛选词，或直接查看其他分区。",
+                                        );
+                                    } else {
+                                        egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+                                            for app in preview.installed_apps.iter().take(80) {
+                                                if !matches_filter(
+                                                    &self.scan_filter,
+                                                    &[
+                                                        &app.display_name,
+                                                        app.source,
+                                                        &app.uninstall_key,
+                                                        &app
+                                                            .install_location
+                                                            .as_ref()
+                                                            .map(|path| path.display().to_string())
+                                                            .unwrap_or_default(),
+                                                    ],
+                                                ) {
+                                                    continue;
+                                                }
+                                                result_card(
+                                                    ui,
+                                                    &app.display_name,
+                                                    &format!("来源：{}", app.source),
+                                                    |ui| {
+                                                        if let Some(path) = &app.install_location {
+                                                            ui.small(format!(
+                                                                "安装位置：{}",
+                                                                path.display()
+                                                            ));
+                                                        }
+                                                        ui.small(format!(
+                                                            "注册表键：{}",
+                                                            app.uninstall_key
+                                                        ));
+                                                    },
+                                                );
+                                                ui.add_space(6.0);
+                                            }
+                                            if preview.installed_apps.len() > 80 {
+                                                ui.small(format!(
+                                                    "仅显示前 80 条，共 {} 条记录。",
+                                                    preview.installed_apps.len()
+                                                ));
+                                            }
+                                        });
+                                    }
+                                },
+                            );
+
+                            card_panel(
+                                &mut columns[1],
+                                "便携软件候选",
+                                "支持目录型和单文件可执行程序，两者都会参与选择。",
+                                |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        section_counter(ui, "筛选命中", filtered_portable_count);
+                                        if ui.add(secondary_action_button("全选命中")).clicked() {
+                                            for key in &visible_portable_keys {
+                                                self.selected_portable_apps.insert(key.clone());
+                                            }
+                                            let _ = self.persist_config();
+                                        }
+                                        if ui.add(secondary_action_button("清空命中")).clicked() {
+                                            for key in &visible_portable_keys {
+                                                self.selected_portable_apps.remove(key);
+                                            }
+                                            let _ = self.persist_config();
+                                        }
+                                    });
+                                    ui.add_space(8.0);
+                                    if filtered_portable_count == 0 {
+                                        compact_empty_state(
+                                            ui,
+                                            "没有命中的便携候选",
+                                            "可以换一个筛选词，或者重新扫描。",
+                                        );
+                                    } else {
+                                        egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+                                        for item in preview.portable_candidates.iter().take(20) {
+                                            let root_path = item.root_path.display().to_string();
+                                            let main_executable =
+                                                item.main_executable.display().to_string();
+                                            if !matches_filter(
+                                                &self.scan_filter,
+                                                &[
+                                                    &item.display_name,
+                                                    &root_path,
+                                                    &main_executable,
+                                                    item.confidence_label(),
+                                                ],
+                                            ) {
+                                                continue;
+                                            }
+                                            let key = plan::path_key(&item.root_path);
+                                            let mut selected = self.selected_portable_apps.contains(&key);
+                                            if ui.checkbox(&mut selected, &item.display_name).changed() {
+                                                if self.selected_portable_apps.contains(&key) {
+                                                    self.selected_portable_apps.remove(&key);
+                                                } else {
+                                                    self.selected_portable_apps.insert(key.clone());
+                                                }
+                                                let _ = self.persist_config();
+                                            }
+                                            selection_result_card(
+                                                ui,
+                                                selected,
+                                                &item.display_name,
+                                                "便携软件候选",
+                                                |ui| {
+                                                ui.small(format!(
+                                                    "类型：{} | 置信度：{}",
+                                                    portable_candidate_kind(
+                                                        &root_path,
+                                                        &main_executable
+                                                    ),
+                                                    item.confidence_label()
+                                                ));
+                                                ui.small(format!("来源路径：{}", root_path));
+                                                ui.small(format!("主程序：{}", main_executable));
+                                                ui.small(format!(
+                                                    "预计大小：{}，共 {} 个文件",
+                                                    format_bytes(item.stats.total_bytes),
+                                                    item.stats.file_count
+                                                ));
+                                                ui.small(format!(
+                                                    "默认状态：{}",
+                                                    if item.default_selected { "已选择" } else { "未选择" }
+                                                ));
+                                                for reason in item.reasons.iter().take(3) {
+                                                    ui.small(reason);
+                                                }
+                                                },
+                                            );
+                                            ui.add_space(6.0);
+                                        }
+                                    });
+                                    }
+                                },
+                            );
+
+                            card_panel(
+                                &mut columns[2],
+                                "用户数据目录",
+                                "默认保留迁移价值高的个人文件和常用配置。",
+                                |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        section_counter(ui, "筛选命中", filtered_user_root_count);
+                                        if ui.add(secondary_action_button("全选命中")).clicked() {
+                                            for key in &visible_user_root_keys {
+                                                self.selected_user_roots.insert(key.clone());
+                                            }
+                                            let _ = self.persist_config();
+                                        }
+                                        if ui.add(secondary_action_button("清空命中")).clicked() {
+                                            for key in &visible_user_root_keys {
+                                                self.selected_user_roots.remove(key);
+                                            }
+                                            let _ = self.persist_config();
+                                        }
+                                    });
+                                    ui.add_space(8.0);
+                                    if filtered_user_root_count == 0 {
+                                        compact_empty_state(
+                                            ui,
+                                            "没有命中的用户目录",
+                                            "当前筛选词没有匹配到目录或配置项。",
+                                        );
+                                    } else {
+                                        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                                        for root in &preview.user_data_roots {
+                                            let path = root.path.display().to_string();
+                                            if !matches_filter(
+                                                &self.scan_filter,
+                                                &[root.label, root.category, root.reason, &path],
+                                            ) {
+                                                continue;
+                                            }
+                                            let key = plan::path_key(&root.path);
+                                            let mut selected = self.selected_user_roots.contains(&key);
+                                            if ui.checkbox(&mut selected, root.label).changed() {
+                                                if selected {
+                                                    self.selected_user_roots.insert(key.clone());
+                                                } else {
+                                                    self.selected_user_roots.remove(&key);
+                                                }
+                                                let _ = self.persist_config();
+                                            }
+                                            selection_result_card(ui, selected, root.label, root.category, |ui| {
+                                                ui.small(format!("路径：{}", path));
+                                                ui.small(root.reason);
+                                                ui.small(format!(
+                                                    "预计大小：{}，共 {} 个文件",
+                                                    format_bytes(root.stats.total_bytes),
+                                                    root.stats.file_count
+                                                ));
+                                                ui.small(format!(
+                                                    "默认状态：{}",
+                                                    if root.default_selected { "已选择" } else { "未选择" }
+                                                ));
+                                            });
+                                            ui.add_space(6.0);
+                                        }
+                                    });
+                                    }
+
+                                    ui.separator();
+                                    ui.label(RichText::new("排除规则").strong());
+                                    for rule in &preview.exclusion_rules {
+                                        ui.small(format!("{}: {}", rule.label, rule.pattern));
+                                    }
+                                },
+                            );
+                        });
+                        } else {
+                            card_panel(
+                                ui,
+                                "还没有扫描计划",
+                                "先运行一次扫描，WinRehome 才能列出可迁移的个人目录和便携软件候选。",
+                                |ui| {
+                                    ui.small("点击顶部的“生成扫描预览”后，这里会出现可审查的备份计划。");
+                                },
+                            );
+                        }
+                    }
+
+                    if matches!(resolved_workspace, WorkspaceView::Restore) {
+                        if let Some(loaded) = self.loaded_archive.clone() {
+                        let visible_restore_user_keys: Vec<String> = loaded
+                            .manifest
+                            .selected_user_roots
+                            .iter()
+                            .filter_map(|root| {
+                                matches_filter(
+                                    &self.restore_filter,
+                                    &[&root.label, &root.category, &root.path],
+                                )
+                                .then(|| user_restore_root_key(root))
+                            })
+                            .collect();
+                        let visible_restore_portable_keys: Vec<String> = loaded
+                            .manifest
+                            .selected_portable_apps
+                            .iter()
+                            .filter_map(|app| {
+                                matches_filter(
+                                    &self.restore_filter,
+                                    &[&app.display_name, &app.root_path, &app.main_executable],
+                                )
+                                .then(|| portable_restore_root_key(app))
+                            })
+                            .collect();
+                        let filtered_restore_user_count = loaded
+                            .manifest
+                            .selected_user_roots
+                            .iter()
+                            .filter(|root| {
+                                matches_filter(
+                                    &self.restore_filter,
+                                    &[&root.label, &root.category, &root.path],
+                                )
+                            })
+                            .count();
+                        let filtered_restore_portable_count = loaded
+                            .manifest
+                            .selected_portable_apps
+                            .iter()
+                            .filter(|app| {
+                                matches_filter(
+                                    &self.restore_filter,
+                                    &[&app.display_name, &app.root_path, &app.main_executable],
+                                )
+                            })
+                            .count();
+                        let effective_restore_roots = effective_restore_roots(
+                            &loaded,
+                            self.restore_user_data,
+                            self.restore_portable_apps,
+                            &self.selected_restore_roots,
+                        );
+                        let restore_summary =
+                            build_restore_preview_summary(&loaded, &effective_restore_roots);
+
+                        card_panel(
+                            ui,
+                            "归档恢复",
+                            "恢复时按类别和具体范围选择，不会默认静默覆盖目标目录里的文件。",
+                            |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(233, 238, 245),
+                                        "当前归档",
+                                        &loaded.path.display().to_string(),
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(241, 247, 241),
+                                        "归档大小",
+                                        &format_bytes(loaded.manifest.stored_bytes),
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(245, 240, 233),
+                                        "文件数",
+                                        &loaded.manifest.files.len().to_string(),
+                                    );
+                                });
+
+                                ui.label(format!(
+                                    "创建时间：{} | 已安装软件记录：{} | 用户目录：{} | 便携软件：{}",
+                                    loaded.manifest.created_at_unix,
+                                    loaded.manifest.installed_apps.len(),
+                                    loaded.manifest.selected_user_roots.len(),
+                                    loaded.manifest.selected_portable_apps.len()
+                                ));
+
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label("归档路径");
+                                    if ui.text_edit_singleline(&mut self.archive_path_input).changed() {
+                                        let _ = self.persist_config();
+                                    }
+                                    if ui.button("加载归档").clicked() {
+                                        let path = PathBuf::from(self.archive_path_input.trim());
+                                        self.load_archive_from_path(path);
+                                    }
+                                });
+
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label("恢复筛选");
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.restore_filter)
+                                            .hint_text("按名称或路径过滤恢复范围"),
+                                    );
+                                });
+                                if !self.restore_filter.trim().is_empty()
+                                    && filtered_restore_user_count == 0
+                                    && filtered_restore_portable_count == 0
+                                {
+                                    ui.add_space(8.0);
+                                    compact_empty_state(
+                                        ui,
+                                        "没有命中的恢复范围",
+                                        "当前筛选词没有匹配到任何用户目录或便携软件。",
+                                    );
+                                }
+
+                                if !loaded.manifest.installed_apps.is_empty() {
+                                    ui.collapsing("已安装软件记录", |ui| {
+                                        ui.small("这些软件只保留清单，不会从归档中恢复程序本体。");
+                                        egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                                            for app in loaded.manifest.installed_apps.iter().take(80) {
+                                                result_card(
+                                                    ui,
+                                                    &app.display_name,
+                                                    &format!("来源：{}", app.source),
+                                                    |ui| {
+                                                        if let Some(path) = &app.install_location {
+                                                            ui.small(format!("安装位置：{}", path));
+                                                        }
+                                                        ui.small(format!(
+                                                            "注册表键：{}",
+                                                            app.uninstall_key
+                                                        ));
+                                                    },
+                                                );
+                                                ui.add_space(6.0);
+                                            }
+                                        });
+                                    });
+                                }
+
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui.checkbox(&mut self.restore_user_data, "恢复个人文件").changed() {
+                                        let _ = self.persist_config();
+                                    }
+                                    if ui.checkbox(&mut self.restore_portable_apps, "恢复便携软件").changed() {
+                                        let _ = self.persist_config();
+                                    }
+                                    if ui.checkbox(
+                                        &mut self.skip_existing_restore_files,
+                                        "跳过已存在文件",
+                                    )
+                                    .changed()
+                                    {
+                                        let _ = self.persist_config();
+                                    }
+                                });
+
+                                ui.collapsing("归档内容", |ui| {
+                                    let all_restore_roots = collect_restore_roots(&loaded);
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.small(format!(
+                                            "已选恢复范围：{} / {}",
+                                            self.selected_restore_roots.len(),
+                                            all_restore_roots.len()
+                                        ));
+                                        if ui.add(secondary_action_button("全部选择")).clicked() {
+                                            self.selected_restore_roots = all_restore_roots.clone();
+                                            let _ = self.persist_config();
+                                        }
+                                        if ui.add(secondary_action_button("全部清空")).clicked() {
+                                            self.selected_restore_roots.clear();
+                                            let _ = self.persist_config();
+                                        }
+                                    });
+
+                                    if !loaded.manifest.selected_user_roots.is_empty() {
+                                        ui.add_space(4.0);
+                                        ui.label(RichText::new("个人文件目录").strong());
+                                        ui.horizontal_wrapped(|ui| {
+                                            section_counter(ui, "筛选命中", filtered_restore_user_count);
+                                            if ui.add(secondary_action_button("全选命中")).clicked() {
+                                                for key in &visible_restore_user_keys {
+                                                    self.selected_restore_roots.insert(key.clone());
+                                                }
+                                                let _ = self.persist_config();
+                                            }
+                                            if ui.add(secondary_action_button("清空命中")).clicked() {
+                                                for key in &visible_restore_user_keys {
+                                                    self.selected_restore_roots.remove(key);
+                                                }
+                                                let _ = self.persist_config();
+                                            }
+                                        });
+                                        ui.add_space(6.0);
+                                        for root in &loaded.manifest.selected_user_roots {
+                                            if !matches_filter(
+                                                &self.restore_filter,
+                                                &[&root.label, &root.category, &root.path],
+                                            ) {
+                                                continue;
+                                            }
+                                            let key = user_restore_root_key(root);
+                                            let mut selected = self.selected_restore_roots.contains(&key);
+                                            if ui.checkbox(&mut selected, &root.label).changed() {
+                                                if selected {
+                                                    self.selected_restore_roots.insert(key.clone());
+                                                } else {
+                                                    self.selected_restore_roots.remove(&key);
+                                                }
+                                                let _ = self.persist_config();
+                                            }
+                                            selection_result_card(ui, selected, &root.label, &root.category, |ui| {
+                                                ui.small(format!("路径：{}", root.path));
+                                            });
+                                        }
+                                    }
+
+                                    if !loaded.manifest.selected_portable_apps.is_empty() {
+                                        ui.add_space(6.0);
+                                        ui.label(RichText::new("便携软件").strong());
+                                        ui.horizontal_wrapped(|ui| {
+                                            section_counter(
+                                                ui,
+                                                "筛选命中",
+                                                filtered_restore_portable_count,
+                                            );
+                                            if ui.add(secondary_action_button("全选命中")).clicked() {
+                                                for key in &visible_restore_portable_keys {
+                                                    self.selected_restore_roots.insert(key.clone());
+                                                }
+                                                let _ = self.persist_config();
+                                            }
+                                            if ui.add(secondary_action_button("清空命中")).clicked() {
+                                                for key in &visible_restore_portable_keys {
+                                                    self.selected_restore_roots.remove(key);
+                                                }
+                                                let _ = self.persist_config();
+                                            }
+                                        });
+                                        ui.add_space(6.0);
+                                        for app in &loaded.manifest.selected_portable_apps {
+                                            if !matches_filter(
+                                                &self.restore_filter,
+                                                &[&app.display_name, &app.root_path, &app.main_executable],
+                                            ) {
+                                                continue;
+                                            }
+                                            let key = portable_restore_root_key(app);
+                                            let mut selected = self.selected_restore_roots.contains(&key);
+                                            if ui.checkbox(&mut selected, &app.display_name).changed() {
+                                                if selected {
+                                                    self.selected_restore_roots.insert(key.clone());
+                                                } else {
+                                                    self.selected_restore_roots.remove(&key);
+                                                }
+                                                let _ = self.persist_config();
+                                            }
+                                            selection_result_card(ui, selected, &app.display_name, "便携软件", |ui| {
+                                                ui.small(format!("路径：{}", app.root_path));
+                                                ui.small(format!("主程序：{}", app.main_executable));
+                                            });
+                                        }
+                                    }
+                                });
+
+                                ui.add_space(8.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(252, 248, 236),
+                                        "已选个人目录",
+                                        &restore_summary.selected_user_root_count.to_string(),
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(240, 247, 241),
+                                        "已选便携软件",
+                                        &restore_summary.selected_portable_app_count.to_string(),
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(238, 243, 249),
+                                        "预计恢复文件",
+                                        &restore_summary.selected_file_count.to_string(),
+                                    );
+                                    metric_tile(
+                                        ui,
+                                        Color32::from_rgb(245, 240, 233),
+                                        "预计恢复大小",
+                                        &format_bytes(restore_summary.selected_bytes),
+                                    );
+                                });
+
+                                if self.restore_destination_input.trim().is_empty() {
+                                    ui.small("目标目录尚未填写。");
+                                } else {
+                                    ui.small(format!(
+                                        "目标目录：{}",
+                                        self.restore_destination_input.trim()
+                                    ));
+                                }
+                                if self.skip_existing_restore_files {
+                                    ui.small("已启用“跳过已存在文件”，恢复时会保留目标目录里的同名文件。");
+                                } else {
+                                    ui.small("默认遇到同名文件会停止恢复，不会静默覆盖。");
+                                }
+
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui.add(secondary_action_button("校验归档")).clicked() {
+                                        match archive::verify_archive(&loaded.path) {
+                                            Ok(result) => {
+                                                self.last_verification = Some(result);
+                                                self.last_error = None;
+                                            }
+                                            Err(error) => {
+                                                self.last_verification = None;
+                                                self.last_error = Some(error.to_string());
+                                            }
+                                        }
+                                    }
+
+                                    ui.label("恢复到");
+                                    if ui
+                                        .text_edit_singleline(&mut self.restore_destination_input)
+                                        .changed()
+                                    {
+                                        let _ = self.persist_config();
+                                    }
+                                    if ui.add(secondary_action_button("使用默认恢复目录")).clicked() {
+                                        if let Ok(path) = archive::default_restore_dir(&loaded.path) {
+                                            self.restore_destination_input = path.display().to_string();
+                                            let _ = self.persist_config();
+                                        }
+                                    }
+
+                                    let can_restore = !self.restore_destination_input.trim().is_empty()
+                                        && restore_summary.selected_file_count > 0;
+                                    if ui
+                                        .add_enabled(can_restore, primary_action_button("开始恢复"))
+                                        .clicked()
+                                    {
+                                        let destination =
+                                            PathBuf::from(self.restore_destination_input.trim());
+                                        let use_default_restore = self.restore_user_data
+                                            && self.restore_portable_apps
+                                            && !self.skip_existing_restore_files
+                                            && self.selected_restore_roots == collect_restore_roots(&loaded);
+                                        let restore_result = if use_default_restore {
+                                            archive::restore_archive(&loaded.path, &destination)
+                                        } else {
+                                            archive::restore_archive_with_selection(
+                                                &loaded.path,
+                                                &destination,
+                                                archive::RestoreSelection {
+                                                    restore_user_data: self.restore_user_data,
+                                                    restore_portable_apps: self.restore_portable_apps,
+                                                    selected_roots: effective_restore_roots.clone(),
+                                                    skip_existing_files: self.skip_existing_restore_files,
+                                                },
+                                            )
+                                        };
+
+                                        match restore_result {
+                                            Ok(result) => {
+                                                self.last_restore = Some(result);
+                                                self.last_verification = None;
+                                                self.last_error = None;
+                                                let _ = self.persist_config();
+                                            }
+                                            Err(error) => {
+                                                self.last_restore = None;
+                                                self.last_error = Some(error.to_string());
+                                            }
+                                        }
+                                    }
+                                });
+
+                                if self.restore_destination_input.trim().is_empty() {
+                                    ui.small("请先选择恢复目标目录。");
+                                } else if restore_summary.selected_file_count == 0 {
+                                    ui.small("请至少选择一个已启用的恢复根目录。");
+                                } else {
+                                    ui.small(format!(
+                                        "已准备恢复 {} 个范围中的 {} 个文件。",
+                                        restore_summary.selected_root_count,
+                                        restore_summary.selected_file_count
+                                    ));
+                                }
+                            },
+                        );
+                        } else {
+                            card_panel(
+                                ui,
+                                "还没有已加载归档",
+                                "先加载一个 `.wrh` 归档，才能查看内容、校验完整性并执行恢复。",
+                                |ui| {
+                                    ui.small("可以使用顶部的“加载最新归档”，也可以直接输入归档路径。");
+                                },
+                            );
                         }
                     }
                 });
+        });
+    }
+}
 
-                ui.add_space(10.0);
-                ui.group(|ui| {
-                    ui.label(RichText::new("当前备份计划").strong());
-                    ui.label(format!("保留的用户目录：{}", summary.selected_user_roots));
-                    ui.label(format!(
-                        "保留的便携软件：{}",
-                        summary.selected_portable_apps
-                    ));
-                    ui.label(format!("预计文件数：{}", summary.total_files));
-                    ui.label(format!("预计大小：{}", format_bytes(summary.total_bytes)));
-                });
+fn card_panel(
+    ui: &mut egui::Ui,
+    title: &str,
+    subtitle: &str,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Frame::new()
+        .fill(Color32::from_rgb(252, 253, 250))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(205, 216, 208)))
+        .corner_radius(egui::CornerRadius::same(18))
+        .inner_margin(egui::Margin::same(16))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(title)
+                    .size(19.0)
+                    .strong()
+                    .color(Color32::from_rgb(27, 47, 37)),
+            );
+            if !subtitle.is_empty() {
+                ui.label(RichText::new(subtitle).color(Color32::from_rgb(92, 109, 99)));
+                ui.add_space(8.0);
+            }
+            add_contents(ui);
+        });
+}
 
-                ui.add_space(10.0);
-                ui.columns(3, |columns| {
-                    columns[0].group(|ui| {
-                        ui.label(RichText::new("已安装软件").strong());
-                        for app in preview.installed_apps.iter().take(12) {
-                            ui.label(format!("{} [来源: {}]", app.display_name, app.source));
-                            if let Some(path) = &app.install_location {
-                                ui.small(format!("安装位置：{}", path.display()));
-                            }
-                            ui.small(format!("注册表键：{}", app.uninstall_key));
-                            ui.add_space(4.0);
-                        }
-                    });
+fn workspace_switcher(
+    ui: &mut egui::Ui,
+    active_workspace: &mut WorkspaceView,
+    has_preview: bool,
+    has_loaded_archive: bool,
+) {
+    card_panel(
+        ui,
+        "工作区",
+        "把扫描计划和归档恢复分开，避免所有信息挤在同一屏。",
+        |ui| {
+            ui.horizontal_wrapped(|ui| {
+                workspace_button(ui, active_workspace, WorkspaceView::Overview, "总览", true);
+                workspace_button(
+                    ui,
+                    active_workspace,
+                    WorkspaceView::ScanPlan,
+                    "扫描计划",
+                    has_preview,
+                );
+                workspace_button(
+                    ui,
+                    active_workspace,
+                    WorkspaceView::Restore,
+                    "归档恢复",
+                    has_loaded_archive,
+                );
+            });
+        },
+    );
+}
 
-                    columns[1].group(|ui| {
-                        ui.label(RichText::new("便携软件候选").strong());
-                        egui::ScrollArea::vertical()
-                            .max_height(420.0)
-                            .show(ui, |ui| {
-                                for item in preview.portable_candidates.iter().take(20) {
-                                    let key = plan::path_key(&item.root_path);
-                                    let mut selected = self.selected_portable_apps.contains(&key);
-                                    if ui.checkbox(&mut selected, &item.display_name).changed() {
-                                        if self.selected_portable_apps.contains(&key) {
-                                            self.selected_portable_apps.remove(&key);
-                                        } else {
-                                            self.selected_portable_apps.insert(key.clone());
-                                        }
-                                        let _ = self.persist_config();
-                                    }
-                                    ui.small(format!("置信度：{}", item.confidence_label()));
-                                    ui.small(format!("根目录：{}", item.root_path.display()));
-                                    ui.small(format!("主程序：{}", item.main_executable.display()));
-                                    ui.small(format!(
-                                        "预计大小：{}，共 {} 个文件",
-                                        format_bytes(item.stats.total_bytes),
-                                        item.stats.file_count
-                                    ));
-                                    ui.small(format!(
-                                        "默认状态：{}",
-                                        if item.default_selected {
-                                            "已选择"
-                                        } else {
-                                            "未选择"
-                                        }
-                                    ));
-                                    for reason in item.reasons.iter().take(3) {
-                                        ui.small(reason);
-                                    }
-                                    ui.add_space(6.0);
-                                }
-                            });
-                    });
+fn workspace_button(
+    ui: &mut egui::Ui,
+    active_workspace: &mut WorkspaceView,
+    target: WorkspaceView,
+    label: &str,
+    enabled: bool,
+) {
+    let selected = *active_workspace == target;
+    let button = egui::Button::new(RichText::new(label).strong().color(if selected {
+        Color32::WHITE
+    } else {
+        Color32::from_rgb(42, 60, 49)
+    }))
+    .fill(if selected {
+        Color32::from_rgb(87, 130, 102)
+    } else {
+        Color32::from_rgb(239, 244, 239)
+    });
 
-                    columns[2].group(|ui| {
-                        ui.label(RichText::new("用户数据目录").strong());
-                        egui::ScrollArea::vertical()
-                            .max_height(300.0)
-                            .show(ui, |ui| {
-                                for root in &preview.user_data_roots {
-                                    let key = plan::path_key(&root.path);
-                                    let mut selected = self.selected_user_roots.contains(&key);
-                                    if ui.checkbox(&mut selected, root.label).changed() {
-                                        if selected {
-                                            self.selected_user_roots.insert(key.clone());
-                                        } else {
-                                            self.selected_user_roots.remove(&key);
-                                        }
-                                        let _ = self.persist_config();
-                                    }
-                                    ui.small(format!("分类：{}", root.category));
-                                    ui.small(format!("路径：{}", root.path.display()));
-                                    ui.small(root.reason);
-                                    ui.small(format!(
-                                        "预计大小：{}，共 {} 个文件",
-                                        format_bytes(root.stats.total_bytes),
-                                        root.stats.file_count
-                                    ));
-                                    ui.small(format!(
-                                        "默认状态：{}",
-                                        if root.default_selected {
-                                            "已选择"
-                                        } else {
-                                            "未选择"
-                                        }
-                                    ));
-                                    ui.add_space(6.0);
-                                }
-                            });
+    if ui.add_enabled(enabled, button).clicked() {
+        *active_workspace = target;
+    }
+}
 
-                        ui.add_space(10.0);
-                        ui.label(RichText::new("排除规则").strong());
-                        for rule in &preview.exclusion_rules {
-                            ui.small(format!("{}: {}", rule.label, rule.pattern));
-                        }
-                    });
-                });
+fn flow_chip(ui: &mut egui::Ui, label: &str, active: bool) {
+    let fill = if active {
+        Color32::from_rgb(94, 138, 112)
+    } else {
+        Color32::from_rgb(238, 244, 239)
+    };
+    let text = if active {
+        Color32::WHITE
+    } else {
+        Color32::from_rgb(76, 96, 84)
+    };
+
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(egui::Stroke::new(
+            1.0,
+            if active {
+                Color32::from_rgb(72, 114, 87)
+            } else {
+                Color32::from_rgb(205, 216, 208)
+            },
+        ))
+        .corner_radius(egui::CornerRadius::same(18))
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.label(RichText::new(label).strong().color(text));
+        });
+}
+
+fn primary_action_button(label: &str) -> egui::Button<'_> {
+    egui::Button::new(RichText::new(label).strong().color(Color32::WHITE))
+        .fill(Color32::from_rgb(87, 130, 102))
+        .min_size(egui::vec2(120.0, 34.0))
+}
+
+fn secondary_action_button(label: &str) -> egui::Button<'_> {
+    egui::Button::new(RichText::new(label).color(Color32::from_rgb(43, 60, 49)))
+        .fill(Color32::from_rgb(241, 245, 241))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(196, 210, 201)))
+        .min_size(egui::vec2(108.0, 34.0))
+}
+
+fn quick_action_card(
+    ui: &mut egui::Ui,
+    title: &str,
+    description: &str,
+    button_label: &str,
+    action: impl FnOnce(),
+) {
+    egui::Frame::new()
+        .fill(Color32::from_rgb(246, 249, 246))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(211, 221, 213)))
+        .corner_radius(egui::CornerRadius::same(16))
+        .inner_margin(egui::Margin::same(14))
+        .show(ui, |ui| {
+            ui.label(RichText::new(title).strong());
+            ui.small(description);
+            ui.add_space(8.0);
+            if ui.add(primary_action_button(button_label)).clicked() {
+                action();
             }
         });
+}
+
+fn metric_tile(ui: &mut egui::Ui, fill: Color32, label: &str, value: &str) {
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(205, 216, 208)))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(label)
+                    .size(12.0)
+                    .color(Color32::from_rgb(86, 103, 93)),
+            );
+            ui.label(
+                RichText::new(value)
+                    .size(18.0)
+                    .strong()
+                    .color(Color32::from_rgb(30, 49, 39)),
+            );
+        });
+}
+
+fn status_banner(ui: &mut egui::Ui, fill: Color32, stroke: Color32, text: &str) {
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(egui::Stroke::new(1.0, stroke))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).color(Color32::from_rgb(44, 55, 49)));
+        });
+}
+
+fn principle_row(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("•").color(Color32::from_rgb(95, 138, 109)));
+        ui.small(text);
+    });
+}
+
+fn compact_empty_state(ui: &mut egui::Ui, title: &str, body: &str) {
+    egui::Frame::new()
+        .fill(Color32::from_rgb(247, 249, 246))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(218, 226, 219)))
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(title)
+                    .strong()
+                    .color(Color32::from_rgb(58, 77, 66)),
+            );
+            ui.small(body);
+        });
+}
+
+fn section_counter(ui: &mut egui::Ui, label: &str, count: usize) {
+    egui::Frame::new()
+        .fill(Color32::from_rgb(241, 246, 242))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(205, 216, 208)))
+        .corner_radius(egui::CornerRadius::same(24))
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.small(RichText::new(label).color(Color32::from_rgb(84, 100, 90)));
+                ui.label(
+                    RichText::new(count.to_string())
+                        .strong()
+                        .color(Color32::from_rgb(33, 53, 42)),
+                );
+            });
+        });
+}
+
+fn result_card(ui: &mut egui::Ui, title: &str, meta: &str, add_extra: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(Color32::from_rgb(248, 250, 247))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(218, 226, 219)))
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.label(RichText::new(title).strong());
+            ui.small(meta);
+            add_extra(ui);
+        });
+}
+
+fn selection_result_card(
+    ui: &mut egui::Ui,
+    selected: bool,
+    title: &str,
+    meta: &str,
+    add_extra: impl FnOnce(&mut egui::Ui),
+) {
+    let fill = if selected {
+        Color32::from_rgb(231, 242, 234)
+    } else {
+        Color32::from_rgb(248, 250, 247)
+    };
+    let stroke = if selected {
+        Color32::from_rgb(109, 156, 121)
+    } else {
+        Color32::from_rgb(218, 226, 219)
+    };
+
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(egui::Stroke::new(1.0, stroke))
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(title).strong());
+                if selected {
+                    ui.small(RichText::new("已选中").color(Color32::from_rgb(72, 116, 84)));
+                }
+            });
+            ui.small(meta);
+            add_extra(ui);
+        });
+}
+
+fn matches_filter(filter: &str, fields: &[&str]) -> bool {
+    let query = filter.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+
+    fields
+        .iter()
+        .any(|field| field.to_lowercase().contains(&query))
+}
+
+fn current_stage_label(has_preview: bool, has_loaded_archive: bool) -> &'static str {
+    match (has_preview, has_loaded_archive) {
+        (true, true) => "扫描结果和归档恢复都已就绪",
+        (true, false) => "正在审查扫描结果",
+        (false, true) => "正在准备恢复已有归档",
+        (false, false) => "等待开始第一次扫描",
+    }
+}
+
+fn resolved_workspace(
+    requested: WorkspaceView,
+    has_preview: bool,
+    has_loaded_archive: bool,
+) -> WorkspaceView {
+    match requested {
+        WorkspaceView::Overview => WorkspaceView::Overview,
+        WorkspaceView::ScanPlan if has_preview => WorkspaceView::ScanPlan,
+        WorkspaceView::Restore if has_loaded_archive => WorkspaceView::Restore,
+        _ if has_preview => WorkspaceView::ScanPlan,
+        _ if has_loaded_archive => WorkspaceView::Restore,
+        _ => WorkspaceView::Overview,
     }
 }
 
@@ -837,11 +1905,19 @@ fn build_restore_preview_summary(
     summary
 }
 
+fn portable_candidate_kind(root_path: &str, main_executable: &str) -> &'static str {
+    if root_path.eq_ignore_ascii_case(main_executable) {
+        "单文件可执行程序"
+    } else {
+        "目录型便携软件"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         LoadedArchive, build_restore_preview_summary, effective_restore_roots,
-        portable_restore_root_key, user_restore_root_key,
+        portable_candidate_kind, portable_restore_root_key, user_restore_root_key,
     };
     use crate::archive::{ArchiveManifest, ArchivedFileEntry, ManifestPortableApp, ManifestRoot};
     use std::collections::HashSet;
@@ -924,5 +2000,17 @@ mod tests {
         assert_eq!(effective.len(), 1);
         assert!(effective.contains("portable/PortableTool"));
         assert!(!effective.contains("user/Personal Files/Documents"));
+    }
+
+    #[test]
+    fn portable_candidate_kind_distinguishes_single_exe() {
+        assert_eq!(
+            portable_candidate_kind("D:\\Tools\\Tool.exe", "D:\\Tools\\Tool.exe"),
+            "单文件可执行程序"
+        );
+        assert_eq!(
+            portable_candidate_kind("D:\\Tools\\Tool", "D:\\Tools\\Tool\\Tool.exe"),
+            "目录型便携软件"
+        );
     }
 }

@@ -301,6 +301,7 @@ fn scan_portable_candidates(
         .collect();
 
     let mut candidates = Vec::new();
+    let mut seen_roots = HashSet::new();
 
     for root in roots {
         if !root.exists() {
@@ -313,19 +314,24 @@ fn scan_portable_candidates(
             .into_iter()
             .filter_map(Result::ok)
         {
-            if !entry.file_type().is_dir() {
-                continue;
-            }
-
             let path = entry.path();
             if is_installed_location(path, &installed_locations) || is_known_noise(path) {
                 continue;
             }
 
-            if let Some(candidate) =
+            let candidate = if entry.file_type().is_dir() {
                 evaluate_portable_directory(path, installed_locations.as_slice())
-            {
-                candidates.push(candidate);
+            } else if entry.file_type().is_file() && entry.depth() == 1 {
+                evaluate_portable_executable(path, installed_locations.as_slice())
+            } else {
+                None
+            };
+
+            if let Some(candidate) = candidate {
+                let root_key = path_key(&candidate.root_path);
+                if seen_roots.insert(root_key) {
+                    candidates.push(candidate);
+                }
             }
         }
     }
@@ -337,23 +343,41 @@ fn scan_portable_candidates(
 
 fn discover_portable_search_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
+    let mut seen = HashSet::new();
 
     if let Some(profile) = env::var_os("USERPROFILE") {
         let profile = PathBuf::from(profile);
-        roots.push(profile.join("Desktop"));
-        roots.push(profile.join("Downloads"));
-        roots.push(profile.join("Tools"));
-        roots.push(profile.join("PortableApps"));
+        push_search_root(&mut roots, &mut seen, profile.join("Desktop"));
+        push_search_root(&mut roots, &mut seen, profile.join("Downloads"));
+        push_search_root(&mut roots, &mut seen, profile.join("Tools"));
+        push_search_root(&mut roots, &mut seen, profile.join("PortableApps"));
     }
 
-    for drive in ["D:\\", "E:\\", "F:\\"] {
-        let base = PathBuf::from(drive);
-        roots.push(base.join("Tools"));
-        roots.push(base.join("PortableApps"));
-        roots.push(base.join("Apps"));
+    for drive in existing_windows_drives() {
+        push_search_root(&mut roots, &mut seen, drive.join("Tools"));
+        push_search_root(&mut roots, &mut seen, drive.join("PortableApps"));
+        push_search_root(&mut roots, &mut seen, drive.join("Apps"));
     }
 
     roots
+}
+
+fn push_search_root(roots: &mut Vec<PathBuf>, seen: &mut HashSet<String>, path: PathBuf) {
+    let key = path_key(&path);
+    if seen.insert(key) {
+        roots.push(path);
+    }
+}
+
+fn existing_windows_drives() -> Vec<PathBuf> {
+    let mut drives = Vec::new();
+    for letter in 'C'..='Z' {
+        let drive = PathBuf::from(format!("{letter}:\\"));
+        if drive.exists() {
+            drives.push(drive);
+        }
+    }
+    drives
 }
 
 fn is_installed_location(path: &Path, installed_locations: &[PathBuf]) -> bool {
@@ -424,13 +448,21 @@ fn evaluate_portable_directory(
         return None;
     }
 
-    let main_executable = executables
+    let portable_executables: Vec<PathBuf> = executables
+        .into_iter()
+        .filter(|path| !is_probable_installer_executable(path))
+        .collect();
+    if portable_executables.is_empty() {
+        return None;
+    }
+
+    let main_executable = portable_executables
         .iter()
         .max_by_key(|path| score_executable_name(path))
         .cloned()?;
     let display_name = path.file_name()?.to_string_lossy().to_string();
 
-    let confidence = if support_file_hits >= 3 && executables.len() <= 4 {
+    let confidence = if support_file_hits >= 3 && portable_executables.len() <= 4 {
         PortableConfidence::High
     } else if support_file_hits + data_file_hits >= 1 {
         PortableConfidence::Medium
@@ -439,7 +471,10 @@ fn evaluate_portable_directory(
     };
 
     let mut reasons = Vec::new();
-    reasons.push(format!("{} executable(s) found", executables.len()));
+    reasons.push(format!(
+        "{} executable(s) found",
+        portable_executables.len()
+    ));
     if support_file_hits > 0 {
         reasons.push(format!("{support_file_hits} support/config file(s) found"));
     }
@@ -464,6 +499,53 @@ fn evaluate_portable_directory(
     })
 }
 
+fn evaluate_portable_executable(
+    path: &Path,
+    installed_locations: &[PathBuf],
+) -> Option<PortableAppCandidate> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+    if extension.as_deref() != Some("exe") {
+        return None;
+    }
+    if is_system_install_path(path)
+        || is_installed_location(path, installed_locations)
+        || is_probable_installer_executable(path)
+    {
+        return None;
+    }
+
+    let display_name = path.file_stem()?.to_string_lossy().trim().to_string();
+    if display_name.is_empty() {
+        return None;
+    }
+
+    let confidence = if looks_like_curated_portable_location(path) {
+        PortableConfidence::High
+    } else {
+        PortableConfidence::Medium
+    };
+    let stats = estimate_path_stats(path);
+    let default_selected = matches!(confidence, PortableConfidence::High);
+
+    let mut reasons = vec!["single executable candidate found".to_string()];
+    if looks_like_curated_portable_location(path) {
+        reasons.push("stored under a common portable-app location".to_string());
+    }
+
+    Some(PortableAppCandidate {
+        display_name,
+        root_path: path.to_path_buf(),
+        main_executable: path.to_path_buf(),
+        confidence,
+        default_selected,
+        stats,
+        reasons,
+    })
+}
+
 fn score_executable_name(path: &Path) -> usize {
     let file_name = path
         .file_name()
@@ -479,6 +561,35 @@ fn score_executable_name(path: &Path) -> usize {
         score += 3;
     }
     score + file_name.len()
+}
+
+fn is_probable_installer_executable(path: &Path) -> bool {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    [
+        "setup",
+        "install",
+        "installer",
+        "uninstall",
+        "unins",
+        "update",
+        "updater",
+        "patch",
+    ]
+    .iter()
+    .any(|pattern| file_name.contains(pattern))
+}
+
+fn looks_like_curated_portable_location(path: &Path) -> bool {
+    path.ancestors()
+        .filter_map(|ancestor| ancestor.file_name())
+        .filter_map(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .any(|segment| matches!(segment.as_str(), "portableapps" | "tools" | "apps"))
 }
 
 fn estimate_path_stats(path: &Path) -> PathStats {
@@ -542,7 +653,10 @@ pub fn path_key(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{evaluate_portable_directory, is_known_noise, is_system_install_path};
+    use super::{
+        evaluate_portable_directory, evaluate_portable_executable, is_known_noise,
+        is_system_install_path,
+    };
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -591,6 +705,60 @@ mod tests {
 
         assert_eq!(candidate.confidence_label(), "high");
         assert!(candidate.default_selected);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn detects_single_executable_candidate() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-single-exe-{unique}"));
+        fs::create_dir_all(&root).expect("create single-exe test root");
+        let exe = root.join("Tool.exe");
+        fs::write(&exe, b"exe").expect("write exe");
+
+        let candidate =
+            evaluate_portable_executable(&exe, &[]).expect("single executable candidate expected");
+
+        assert_eq!(candidate.display_name, "Tool");
+        assert_eq!(candidate.root_path, exe);
+        assert_eq!(candidate.main_executable, candidate.root_path);
+        assert_eq!(candidate.stats.file_count, 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_installer_like_executables() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-installer-exe-{unique}"));
+        fs::create_dir_all(&root).expect("create installer-like test root");
+        let installer = root.join("ToolSetup.exe");
+        fs::write(&installer, b"exe").expect("write installer-like exe");
+
+        assert!(evaluate_portable_executable(&installer, &[]).is_none());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rejects_directory_with_only_setup_executable() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-setup-dir-{unique}"));
+        fs::create_dir_all(&root).expect("create setup-only dir");
+        fs::write(root.join("Setup.exe"), b"exe").expect("write setup exe");
+        fs::write(root.join("tool.ini"), b"ini").expect("write support file");
+
+        assert!(evaluate_portable_directory(&root, &[]).is_none());
 
         let _ = fs::remove_dir_all(root);
     }

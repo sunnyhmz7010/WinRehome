@@ -51,6 +51,8 @@ These rules are intentionally written in a reusable way so they can be copied in
 - Rewrite stable release notes from the commits actually included by the published tag. Do not mix in changes that landed only on `main` after that tag.
 - When converting prereleases into a stable release, aggregate the effective user-visible changes across the prerelease cycle instead of copying beta notes verbatim.
 - If replacing or deleting an older release in favor of a newer one, compare the old tag, the new tag, and the default branch separately so unreleased work is not accidentally documented.
+- Do not promote a prerelease to a stable `vX.Y.Z` release unless the user explicitly asks for that exact stable release.
+- GitHub release titles should default to the bare tag name such as `v0.1.0` or `v0.1.0-beta.1`, not `WinRehome v0.1.0`, unless the user explicitly asks for a product-prefixed title.
 
 ## Repository-Specific Rules
 
@@ -120,7 +122,5 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 
 - GitHub release packaging is handled by `.github/workflows/cd.yaml`.
 - The release workflow is triggered by the `Release published` event.
-- Do not promote a prerelease to a stable `vX.Y.Z` release unless the user explicitly asks for that exact stable release.
-- GitHub release titles should default to the bare tag name such as `v0.1.0` or `v0.1.0-beta.1`, not `WinRehome v0.1.0`, unless the user explicitly asks for a product-prefixed title.
 - Release assets should include a Windows executable named like `WinRehome-vX.Y.Z-windows-x64.exe`.
 - If release packaging changes, update both the workflow and this file in the same task.

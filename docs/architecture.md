@@ -17,7 +17,7 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 
 - Installed software inventory from registry uninstall keys
 - High-value user data roots with default recommendations
-- Portable application candidate discovery from curated search roots
+- Portable application candidate discovery from curated search roots, including single executable candidates
 - Desktop preview UI with reviewable backup-plan estimates
 - Single-file `.wrh` archive writing with manifest validation
 - `.wrh` archive verification before restore with size and CRC checks
