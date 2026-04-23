@@ -169,12 +169,25 @@ impl WinRehomeApp {
     fn load_archive_from_path(&mut self, path: PathBuf) {
         match archive::read_archive_manifest(&path) {
             Ok(manifest) => {
+                let previous_archive_path = self
+                    .loaded_archive
+                    .as_ref()
+                    .map(|archive| archive.path.clone())
+                    .or_else(|| {
+                        (!self.archive_path_input.trim().is_empty())
+                            .then(|| PathBuf::from(self.archive_path_input.trim()))
+                    });
+                let previous_restore_roots = self.selected_restore_roots.clone();
                 self.restore_destination_input = archive::default_restore_dir(&path)
                     .map(|value| value.display().to_string())
                     .unwrap_or_default();
                 self.archive_path_input = path.display().to_string();
                 let loaded = LoadedArchive { path, manifest };
-                self.selected_restore_roots = collect_restore_roots(&loaded);
+                self.selected_restore_roots = restore_roots_for_loaded_archive(
+                    &loaded,
+                    previous_archive_path.as_deref(),
+                    &previous_restore_roots,
+                );
                 self.loaded_archive = Some(loaded);
                 self.restore_filter.clear();
                 self.restore_inventory_filter.clear();
@@ -2905,6 +2918,27 @@ fn retained_restore_roots(
         .collect()
 }
 
+fn restore_roots_for_loaded_archive(
+    loaded: &LoadedArchive,
+    previous_archive_path: Option<&Path>,
+    previous_roots: &HashSet<String>,
+) -> HashSet<String> {
+    if previous_archive_path
+        .map(|path| same_archive_path(path, &loaded.path))
+        .unwrap_or(false)
+    {
+        return retained_restore_roots(Some(loaded), previous_roots);
+    }
+
+    collect_restore_roots(loaded)
+}
+
+fn same_archive_path(left: &Path, right: &Path) -> bool {
+    left.as_os_str()
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+}
+
 fn effective_restore_roots(
     loaded: &LoadedArchive,
     restore_user_data: bool,
@@ -2968,7 +3002,8 @@ mod tests {
     use super::{
         InstalledAppExportRow, LoadedArchive, build_restore_preview_summary,
         effective_restore_roots, escape_csv_field, export_installed_app_inventory_csv,
-        portable_candidate_kind, portable_restore_root_key, user_restore_root_key,
+        portable_candidate_kind, portable_restore_root_key, restore_roots_for_loaded_archive,
+        user_restore_root_key,
     };
     use crate::archive::{ArchiveManifest, ArchivedFileEntry, ManifestPortableApp, ManifestRoot};
     use std::collections::HashSet;
@@ -3099,5 +3134,43 @@ mod tests {
         assert!(csv.contains("\"Tool\"\"One\""));
 
         let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn reloading_same_archive_keeps_filtered_restore_roots() {
+        let loaded = sample_loaded_archive();
+        let selected = HashSet::from([portable_restore_root_key(
+            &loaded.manifest.selected_portable_apps[0],
+        )]);
+
+        let retained = restore_roots_for_loaded_archive(&loaded, Some(&loaded.path), &selected);
+
+        assert_eq!(retained, selected);
+    }
+
+    #[test]
+    fn reloading_same_archive_keeps_empty_restore_selection() {
+        let loaded = sample_loaded_archive();
+
+        let retained =
+            restore_roots_for_loaded_archive(&loaded, Some(&loaded.path), &HashSet::new());
+
+        assert!(retained.is_empty());
+    }
+
+    #[test]
+    fn loading_different_archive_resets_restore_selection_to_all_roots() {
+        let loaded = sample_loaded_archive();
+        let selected = HashSet::from([portable_restore_root_key(
+            &loaded.manifest.selected_portable_apps[0],
+        )]);
+
+        let restored = restore_roots_for_loaded_archive(
+            &loaded,
+            Some(&PathBuf::from("D:\\Other\\different.wrh")),
+            &selected,
+        );
+
+        assert_eq!(restored, super::collect_restore_roots(&loaded));
     }
 }
