@@ -130,7 +130,7 @@ impl WinRehomeApp {
                 .unwrap_or_default();
         }
 
-        app.recent_archives = archive::list_recent_archives(8).unwrap_or_default();
+        app.refresh_recent_archives();
         app
     }
 
@@ -187,7 +187,7 @@ impl WinRehomeApp {
                 self.last_restore = None;
                 self.last_notice = None;
                 self.last_error = None;
-                self.recent_archives = archive::list_recent_archives(8).unwrap_or_default();
+                self.refresh_recent_archives();
                 let _ = self.persist_config();
             }
             Err(error) => {
@@ -231,6 +231,38 @@ impl WinRehomeApp {
             selected_restore_roots: self.selected_restore_roots.clone(),
             skip_existing_restore_files: self.skip_existing_restore_files,
         })
+    }
+
+    fn refresh_recent_archives(&mut self) {
+        self.recent_archives =
+            archive::list_recent_archives_from_dirs(&self.recent_archive_search_dirs(), 8)
+                .unwrap_or_default();
+    }
+
+    fn recent_archive_search_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+
+        if let Ok(path) = archive::default_output_dir() {
+            dirs.push(path);
+        }
+        if let Some(path) = optional_dir_from_input(&self.backup_output_input) {
+            dirs.push(path);
+        }
+        if let Some(path) = optional_parent_dir_from_input(&self.archive_path_input) {
+            dirs.push(path);
+        }
+        if let Some(result) = &self.last_archive {
+            if let Some(parent) = result.archive_path.parent() {
+                dirs.push(parent.to_path_buf());
+            }
+        }
+        if let Some(loaded) = &self.loaded_archive {
+            if let Some(parent) = loaded.path.parent() {
+                dirs.push(parent.to_path_buf());
+            }
+        }
+
+        dedupe_dirs(dirs)
     }
 }
 
@@ -554,21 +586,19 @@ impl eframe::App for WinRehomeApp {
                                         "打开最近归档",
                                         "直接进入恢复工作区，查看内容、校验完整性并准备恢复。",
                                         "加载最新归档",
-                                        || match archive::find_latest_archive() {
-                                            Ok(Some(path)) => self.load_archive_from_path(path),
-                                            Ok(None) => {
-                                                self.loaded_archive = None;
-                                                self.last_verification = None;
-                                                self.last_restore = None;
-                                                self.last_error = Some(
-                                                    "默认备份目录中没有找到 .wrh 归档。".to_string(),
-                                                );
-                                            }
-                                            Err(error) => {
-                                                self.loaded_archive = None;
-                                                self.last_verification = None;
-                                                self.last_restore = None;
-                                                self.last_error = Some(error.to_string());
+                                        || {
+                                            self.refresh_recent_archives();
+                                            match self.recent_archives.first().cloned() {
+                                                Some(path) => self.load_archive_from_path(path),
+                                                None => {
+                                                    self.loaded_archive = None;
+                                                    self.last_verification = None;
+                                                    self.last_restore = None;
+                                                    self.last_error = Some(
+                                                        "没有在默认目录、当前备份目录或最近使用目录中找到 .wrh 归档。"
+                                                            .to_string(),
+                                                    );
+                                                }
                                             }
                                         },
                                     );
@@ -846,6 +876,7 @@ impl eframe::App for WinRehomeApp {
                                             .changed()
                                         {
                                             let _ = self.persist_config();
+                                            self.refresh_recent_archives();
                                         }
                                         if ui.add(secondary_action_button("浏览目录")).clicked() {
                                             if let Some(path) =
@@ -854,6 +885,7 @@ impl eframe::App for WinRehomeApp {
                                                 self.backup_output_input =
                                                     path.display().to_string();
                                                 let _ = self.persist_config();
+                                                self.refresh_recent_archives();
                                             }
                                         }
                                         if ui.add(secondary_action_button("默认目录")).clicked() {
@@ -861,6 +893,7 @@ impl eframe::App for WinRehomeApp {
                                                 self.backup_output_input =
                                                     path.display().to_string();
                                                 let _ = self.persist_config();
+                                                self.refresh_recent_archives();
                                             }
                                         }
                                         if ui.add(secondary_action_button("打开目录")).clicked() {
@@ -2219,19 +2252,16 @@ fn hero_identity(
 
 fn hero_primary_actions(app: &mut WinRehomeApp, ui: &mut egui::Ui) {
     if ui.add(secondary_action_button("加载最新归档")).clicked() {
-        match archive::find_latest_archive() {
-            Ok(Some(path)) => app.load_archive_from_path(path),
-            Ok(None) => {
+        app.refresh_recent_archives();
+        match app.recent_archives.first().cloned() {
+            Some(path) => app.load_archive_from_path(path),
+            None => {
                 app.loaded_archive = None;
                 app.last_verification = None;
                 app.last_restore = None;
-                app.last_error = Some("默认备份目录中没有找到 .wrh 归档。".to_string());
-            }
-            Err(error) => {
-                app.loaded_archive = None;
-                app.last_verification = None;
-                app.last_restore = None;
-                app.last_error = Some(error.to_string());
+                app.last_error = Some(
+                    "没有在默认目录、当前备份目录或最近使用目录中找到 .wrh 归档。".to_string(),
+                );
             }
         }
     }
@@ -2496,6 +2526,40 @@ fn path_for_picker(current_value: &str) -> Option<PathBuf> {
     } else {
         path.parent().map(|parent| parent.to_path_buf())
     }
+}
+
+fn optional_dir_from_input(current_value: &str) -> Option<PathBuf> {
+    let trimmed = current_value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(trimmed);
+    if path.is_dir() { Some(path) } else { None }
+}
+
+fn optional_parent_dir_from_input(current_value: &str) -> Option<PathBuf> {
+    let trimmed = current_value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(trimmed);
+    path.parent().map(|parent| parent.to_path_buf())
+}
+
+fn dedupe_dirs(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+
+    for dir in dirs {
+        let key = dir.display().to_string().to_lowercase();
+        if seen.insert(key) {
+            deduped.push(dir);
+        }
+    }
+
+    deduped
 }
 
 fn workspace_switcher(

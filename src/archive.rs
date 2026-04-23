@@ -5,7 +5,7 @@ use flate2::Compression;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -195,36 +195,45 @@ pub fn create_backup_archive_in_dir(
     )
 }
 
-pub fn find_latest_archive() -> anyhow::Result<Option<PathBuf>> {
-    Ok(list_recent_archives(1)?.into_iter().next())
-}
+pub fn list_recent_archives_from_dirs(
+    dirs: &[PathBuf],
+    limit: usize,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let mut archives_by_path = HashMap::new();
 
-pub fn list_recent_archives(limit: usize) -> anyhow::Result<Vec<PathBuf>> {
-    let output_dir = default_output_dir()?;
-    if !output_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut archives = Vec::new();
-    for entry in fs::read_dir(&output_dir)? {
-        let entry = match entry {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-
-        let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("wrh") {
+    for dir in dirs {
+        if !dir.exists() || !dir.is_dir() {
             continue;
         }
 
-        let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
+        for entry in fs::read_dir(dir)? {
+            let entry = match entry {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
 
-        archives.push((path, modified));
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("wrh") {
+                continue;
+            }
+
+            let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+
+            archives_by_path
+                .entry(path)
+                .and_modify(|existing: &mut SystemTime| {
+                    if modified > *existing {
+                        *existing = modified;
+                    }
+                })
+                .or_insert(modified);
+        }
     }
 
+    let mut archives: Vec<(PathBuf, SystemTime)> = archives_by_path.into_iter().collect();
     archives.sort_by(|left, right| right.1.cmp(&left.1));
     let mut paths: Vec<PathBuf> = archives.into_iter().map(|(path, _)| path).collect();
     if limit > 0 && paths.len() > limit {
@@ -830,7 +839,8 @@ fn now_unix() -> u64 {
 mod tests {
     use super::{
         ArchiveManifest, FOOTER_MAGIC, FORMAT_VERSION, RestoreSelection, create_backup_archive_at,
-        read_archive_manifest, restore_archive, restore_archive_with_selection, verify_archive,
+        list_recent_archives_from_dirs, read_archive_manifest, restore_archive,
+        restore_archive_with_selection, verify_archive,
     };
     use crate::models::{
         ExclusionRule, InstalledAppRecord, PathStats, PortableAppCandidate, PortableConfidence,
@@ -916,6 +926,34 @@ mod tests {
         assert_eq!(manifest.selected_user_roots.len(), 1);
         assert_eq!(manifest.selected_portable_apps.len(), 1);
         assert!(result.archive_path.exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recent_archives_can_merge_multiple_directories() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-recent-archives-{unique}"));
+        let dir_a = root.join("A");
+        let dir_b = root.join("B");
+        fs::create_dir_all(&dir_a).expect("create dir a");
+        fs::create_dir_all(&dir_b).expect("create dir b");
+
+        let archive_a = dir_a.join("first.wrh");
+        let archive_b = dir_b.join("second.wrh");
+        fs::write(&archive_a, b"fake-archive-a").expect("write archive a");
+        fs::write(&archive_b, b"fake-archive-b").expect("write archive b");
+
+        let archives =
+            list_recent_archives_from_dirs(&[dir_a.clone(), dir_b.clone(), dir_a.clone()], 10)
+                .expect("list recent archives");
+
+        assert_eq!(archives.len(), 2);
+        assert!(archives.contains(&archive_a));
+        assert!(archives.contains(&archive_b));
 
         let _ = fs::remove_dir_all(root);
     }
