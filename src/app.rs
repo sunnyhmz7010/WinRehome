@@ -490,7 +490,7 @@ impl eframe::App for WinRehomeApp {
                                 Color32::from_rgb(230, 242, 233),
                                 Color32::from_rgb(102, 150, 113),
                                 &format!(
-                                    "归档已创建：{}\n{} 个文件，原始大小 {}，归档大小 {}。",
+                                    "归档已创建并完成校验：{}\n{} 个文件，原始大小 {}，归档大小 {}。",
                                     result.archive_path.display(),
                                     result.file_count,
                                     format_bytes(result.original_bytes),

@@ -109,6 +109,7 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 
 - Reliability is more important than compression ratio or scan aggressiveness.
 - Archive changes must preserve validation and safe restore behavior.
+- Backup creation must verify the written archive before reporting success to the user.
 - Do not introduce restore flows that overwrite user files silently.
 - The current archive format is a single `.wrh` file with a manifest footer; keep format updates explicit and reviewable.
 - Restore logic must continue to verify stored size and CRC before reporting success.

@@ -22,6 +22,7 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 - Desktop preview UI with reviewable backup-plan estimates
 - Backup preflight feedback for output-directory validity before archive creation
 - Single-file `.wrh` archive writing with manifest validation
+- Full archive verification after writing before backup creation is reported as successful
 - `.wrh` archive verification before restore with size and CRC checks
 - Restore to a target directory with category toggles and root-level selection
 - Restore preflight feedback for existing-file conflicts and invalid destination paths before execution

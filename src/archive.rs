@@ -684,6 +684,17 @@ fn create_backup_archive_at(
         )
     })?;
 
+    let verification = verify_archive(&archive_path).with_context(|| {
+        format!(
+            "archive verification failed after writing {}",
+            archive_path.display()
+        )
+    });
+    if let Err(error) = verification {
+        let _ = fs::remove_file(&archive_path);
+        bail!(error);
+    }
+
     Ok(BackupResult {
         archive_path,
         file_count: read_back.files.len(),
