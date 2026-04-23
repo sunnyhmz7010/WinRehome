@@ -467,8 +467,10 @@ impl eframe::App for WinRehomeApp {
                                 "方便快速重新打开和验证。",
                                 |ui| {
                                     for path in self.recent_archives.clone().into_iter().take(5) {
-                                        let path_label = path.display().to_string();
-                                        result_card(ui, "归档文件", &path_label, |ui| {
+                                        let file_name = archive_file_label(&path);
+                                        let archive_meta = recent_archive_meta(&path);
+                                        result_card(ui, &file_name, &archive_meta, |ui| {
+                                            ui.small(path.display().to_string());
                                             if ui
                                                 .add(secondary_action_button("加载这个归档"))
                                                 .clicked()
@@ -572,6 +574,10 @@ impl eframe::App for WinRehomeApp {
                                 });
 
                                 if let Some(preview) = &self.preview {
+                                    let scan_summary = preview.summarize_selection(
+                                        &self.selected_user_roots,
+                                        &self.selected_portable_apps,
+                                    );
                                     ui.add_space(10.0);
                                     ui.label(RichText::new("最近一次扫描").strong());
                                     ui.horizontal_wrapped(|ui| {
@@ -594,8 +600,48 @@ impl eframe::App for WinRehomeApp {
                                             &preview.installed_apps.len().to_string(),
                                         );
                                     });
+                                    ui.add_space(8.0);
+                                    card_panel(
+                                        ui,
+                                        "扫描结果已就绪",
+                                        &format!(
+                                            "当前已选 {} 个用户目录、{} 个便携软件，预计 {} 个文件。",
+                                            scan_summary.selected_user_roots,
+                                            scan_summary.selected_portable_apps,
+                                            scan_summary.total_files
+                                        ),
+                                        |ui| {
+                                            ui.horizontal_wrapped(|ui| {
+                                                if overview_jump_button(
+                                                    ui,
+                                                    "看用户目录",
+                                                    "继续审查迁移价值最高的个人数据。",
+                                                ) {
+                                                    self.active_workspace = WorkspaceView::ScanPlan;
+                                                    self.scan_section = ScanPlanSection::UserData;
+                                                }
+                                                if overview_jump_button(
+                                                    ui,
+                                                    "看便携软件",
+                                                    "确认哪些目录型或单文件程序应该一起带走。",
+                                                ) {
+                                                    self.active_workspace = WorkspaceView::ScanPlan;
+                                                    self.scan_section = ScanPlanSection::PortableApps;
+                                                }
+                                                if overview_jump_button(
+                                                    ui,
+                                                    "看软件记录",
+                                                    "检查安装版软件清单，必要时导出 CSV。",
+                                                ) {
+                                                    self.active_workspace = WorkspaceView::ScanPlan;
+                                                    self.scan_section = ScanPlanSection::InstalledApps;
+                                                }
+                                            });
+                                        },
+                                    );
                                 }
                                 if let Some(loaded) = &self.loaded_archive {
+                                    let loaded_archive_name = archive_file_label(&loaded.path);
                                     ui.add_space(10.0);
                                     ui.label(RichText::new("当前已加载归档").strong());
                                     ui.horizontal_wrapped(|ui| {
@@ -618,6 +664,43 @@ impl eframe::App for WinRehomeApp {
                                             &loaded.manifest.installed_apps.len().to_string(),
                                         );
                                     });
+                                    ui.add_space(8.0);
+                                    card_panel(
+                                        ui,
+                                        "恢复入口",
+                                        &format!(
+                                            "{} 已加载，可直接查看软件记录、选择恢复范围或进入执行恢复。",
+                                            loaded_archive_name
+                                        ),
+                                        |ui| {
+                                            ui.horizontal_wrapped(|ui| {
+                                                if overview_jump_button(
+                                                    ui,
+                                                    "看软件记录",
+                                                    "对照归档里的安装版软件清单。",
+                                                ) {
+                                                    self.active_workspace = WorkspaceView::Restore;
+                                                    self.restore_section = RestoreSection::InstalledApps;
+                                                }
+                                                if overview_jump_button(
+                                                    ui,
+                                                    "选恢复范围",
+                                                    "决定恢复哪些个人目录和便携软件。",
+                                                ) {
+                                                    self.active_workspace = WorkspaceView::Restore;
+                                                    self.restore_section = RestoreSection::RestoreScope;
+                                                }
+                                                if overview_jump_button(
+                                                    ui,
+                                                    "执行恢复",
+                                                    "确认目标目录和策略后开始恢复。",
+                                                ) {
+                                                    self.active_workspace = WorkspaceView::Restore;
+                                                    self.restore_section = RestoreSection::RestoreAction;
+                                                }
+                                            });
+                                        },
+                                    );
                                 }
                             },
                         );
@@ -2241,6 +2324,38 @@ fn installed_app_record_card(
         }
         ui.small(format!("注册表键：{uninstall_key}"));
     });
+}
+
+fn overview_jump_button(ui: &mut egui::Ui, title: &str, description: &str) -> bool {
+    let mut clicked = false;
+    egui::Frame::new()
+        .fill(Color32::from_rgb(246, 249, 246))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(211, 221, 213)))
+        .corner_radius(egui::CornerRadius::same(14))
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.label(RichText::new(title).strong());
+            ui.small(description);
+            ui.add_space(6.0);
+            if ui.add(primary_action_button("进入")).clicked() {
+                clicked = true;
+            }
+        });
+    clicked
+}
+
+fn archive_file_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("未知归档")
+        .to_string()
+}
+
+fn recent_archive_meta(path: &Path) -> String {
+    match fs::metadata(path) {
+        Ok(metadata) => format!("{} | .wrh 归档", format_bytes(metadata.len())),
+        Err(_) => ".wrh 归档".to_string(),
+    }
 }
 
 fn pick_inventory_export_path(default_name: &str, directory_hint: Option<&str>) -> Option<PathBuf> {
