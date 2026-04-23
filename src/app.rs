@@ -2122,7 +2122,13 @@ impl eframe::App for WinRehomeApp {
                                                     .restore_destination_input
                                                     .trim()
                                                     .is_empty()
-                                                    && restore_summary.selected_file_count > 0;
+                                                    && restore_summary.selected_file_count > 0
+                                                    && matches!(
+                                                        &restore_preflight,
+                                                        Some(Ok(preflight))
+                                                            if self.skip_existing_restore_files
+                                                                || preflight.conflicting_files == 0
+                                                    );
                                                 if ui
                                                     .add_enabled(
                                                         can_restore,
