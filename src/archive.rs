@@ -41,6 +41,15 @@ pub struct VerificationResult {
     pub verified_bytes: u64,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct RestorePreflight {
+    pub selected_files: usize,
+    pub conflicting_files: usize,
+    pub conflict_examples: Vec<String>,
+    pub destination_exists: bool,
+    pub destination_is_directory: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreSelection {
     pub restore_user_data: bool,
@@ -292,6 +301,75 @@ pub fn restore_archive_with_selection(
 ) -> anyhow::Result<RestoreResult> {
     let manifest = read_archive_manifest(archive_path)?;
     restore_archive_with_manifest(archive_path, destination_root, &manifest, selection)
+}
+
+pub fn preview_restore_with_manifest(
+    destination_root: &Path,
+    manifest: &ArchiveManifest,
+    selection: &RestoreSelection,
+) -> anyhow::Result<RestorePreflight> {
+    let selected_files: Vec<&ArchivedFileEntry> = manifest
+        .files
+        .iter()
+        .filter(|entry| {
+            let category_allowed = match entry.entry_kind.as_str() {
+                "user_data" => selection.restore_user_data,
+                "portable_app" => selection.restore_portable_apps,
+                _ => false,
+            };
+
+            if !category_allowed {
+                return false;
+            }
+
+            if selection.selected_roots.is_empty() {
+                return false;
+            }
+
+            selection.selected_roots.iter().any(|root| {
+                entry.archive_path == *root || entry.archive_path.starts_with(&format!("{root}/"))
+            })
+        })
+        .collect();
+
+    if selected_files.is_empty() {
+        bail!("Archive does not contain any files to restore.");
+    }
+
+    let destination_metadata = fs::metadata(destination_root).ok();
+    if destination_metadata
+        .as_ref()
+        .is_some_and(|metadata| !metadata.is_dir())
+    {
+        bail!(
+            "restore destination is an existing file: {}",
+            destination_root.display()
+        );
+    }
+
+    let mut preview = RestorePreflight {
+        selected_files: selected_files.len(),
+        destination_exists: destination_metadata.is_some(),
+        destination_is_directory: destination_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.is_dir()),
+        ..RestorePreflight::default()
+    };
+
+    for entry in selected_files {
+        let relative_restore_path = validate_restore_relative_path(&entry.archive_path)?;
+        let output_path = destination_root.join(relative_restore_path);
+        if output_path.exists() {
+            preview.conflicting_files += 1;
+            if preview.conflict_examples.len() < 3 {
+                preview
+                    .conflict_examples
+                    .push(output_path.display().to_string());
+            }
+        }
+    }
+
+    Ok(preview)
 }
 
 fn restore_archive_with_manifest(
@@ -838,8 +916,9 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchiveManifest, FOOTER_MAGIC, FORMAT_VERSION, RestoreSelection, create_backup_archive_at,
-        list_recent_archives_from_dirs, read_archive_manifest, restore_archive,
+        ArchiveManifest, ArchivedFileEntry, FOOTER_MAGIC, FORMAT_VERSION, ManifestRoot,
+        RestoreSelection, create_backup_archive_at, list_recent_archives_from_dirs,
+        preview_restore_with_manifest, read_archive_manifest, restore_archive,
         restore_archive_with_selection, verify_archive,
     };
     use crate::models::{
@@ -956,6 +1035,124 @@ mod tests {
         assert!(archives.contains(&archive_b));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_preflight_counts_existing_conflicts() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-restore-preflight-{unique}"));
+        fs::create_dir_all(&root).expect("create test root");
+        let docs = root.join("Docs");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::write(docs.join("note.txt"), b"hello").expect("write docs");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files",
+                label: "Documents",
+                path: docs.clone(),
+                reason: "Test documents",
+                default_selected: true,
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 5,
+                },
+            }],
+            exclusion_rules: vec![],
+        };
+
+        let result = create_backup_archive_at(
+            &preview,
+            &HashSet::from([docs.display().to_string().to_lowercase()]),
+            &HashSet::new(),
+            &root.join("archive"),
+        )
+        .expect("create archive");
+        let manifest = read_archive_manifest(&result.archive_path).expect("read manifest");
+        let restore_dir = root.join("restore");
+        fs::create_dir_all(restore_dir.join("user/Personal Files/Documents"))
+            .expect("create restore dir");
+        fs::write(
+            restore_dir.join("user/Personal Files/Documents/note.txt"),
+            b"existing",
+        )
+        .expect("write existing restore file");
+
+        let preview = preview_restore_with_manifest(
+            &restore_dir,
+            &manifest,
+            &RestoreSelection {
+                restore_user_data: true,
+                restore_portable_apps: false,
+                selected_roots: HashSet::from(["user/Personal Files/Documents".to_string()]),
+                skip_existing_files: false,
+            },
+        )
+        .expect("preview restore");
+
+        assert_eq!(preview.selected_files, 1);
+        assert_eq!(preview.conflicting_files, 1);
+        assert_eq!(preview.conflict_examples.len(), 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_preflight_rejects_destination_that_is_file() {
+        let manifest = ArchiveManifest {
+            format_version: 1,
+            created_at_unix: 1,
+            app_name: "WinRehome".to_string(),
+            app_version: "0.1.0".to_string(),
+            installed_apps: vec![],
+            selected_user_roots: vec![ManifestRoot {
+                category: "Personal Files".to_string(),
+                label: "Documents".to_string(),
+                path: "C:\\Users\\Sunny\\Documents".to_string(),
+                reason: "Test".to_string(),
+            }],
+            selected_portable_apps: vec![],
+            files: vec![ArchivedFileEntry {
+                source_path: "a".to_string(),
+                archive_path: "user/Personal Files/Documents/note.txt".to_string(),
+                entry_kind: "user_data".to_string(),
+                offset: 0,
+                stored_size: 1,
+                original_size: 10,
+                crc32: 1,
+            }],
+            original_bytes: 10,
+            stored_bytes: 8,
+        };
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let destination_file =
+            std::env::temp_dir().join(format!("winrehome-preflight-destination-{unique}.txt"));
+        fs::write(&destination_file, b"not a directory").expect("write destination file");
+
+        let error = preview_restore_with_manifest(
+            &destination_file,
+            &manifest,
+            &RestoreSelection {
+                restore_user_data: true,
+                restore_portable_apps: false,
+                selected_roots: HashSet::from(["user/Personal Files/Documents".to_string()]),
+                skip_existing_files: false,
+            },
+        )
+        .expect_err("file destination should be rejected");
+
+        assert!(error.to_string().contains("existing file"));
+
+        let _ = fs::remove_file(destination_file);
     }
 
     #[test]

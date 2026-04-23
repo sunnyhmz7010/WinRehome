@@ -1498,14 +1498,30 @@ impl eframe::App for WinRehomeApp {
                                 })
                                 .count();
                             let all_restore_roots = collect_restore_roots(&loaded);
-                            let effective_restore_roots = effective_restore_roots(
-                                &loaded,
-                                self.restore_user_data,
-                                self.restore_portable_apps,
-                                &self.selected_restore_roots,
-                            );
-                            let restore_summary =
-                                build_restore_preview_summary(&loaded, &effective_restore_roots);
+                        let effective_restore_roots = effective_restore_roots(
+                            &loaded,
+                            self.restore_user_data,
+                            self.restore_portable_apps,
+                            &self.selected_restore_roots,
+                        );
+                        let restore_summary =
+                            build_restore_preview_summary(&loaded, &effective_restore_roots);
+                        let restore_preflight = if self.restore_destination_input.trim().is_empty()
+                            || restore_summary.selected_file_count == 0
+                        {
+                            None
+                        } else {
+                            Some(archive::preview_restore_with_manifest(
+                                Path::new(self.restore_destination_input.trim()),
+                                &loaded.manifest,
+                                &archive::RestoreSelection {
+                                    restore_user_data: self.restore_user_data,
+                                    restore_portable_apps: self.restore_portable_apps,
+                                    selected_roots: effective_restore_roots.clone(),
+                                    skip_existing_files: self.skip_existing_restore_files,
+                                },
+                            ))
+                        };
 
                             card_panel(
                                 ui,
@@ -2149,13 +2165,18 @@ impl eframe::App for WinRehomeApp {
                                                         Ok(result) => {
                                                             self.last_restore = Some(result);
                                                             self.last_verification = None;
+                                                            self.last_notice = None;
                                                             self.last_error = None;
                                                             let _ = self.persist_config();
                                                         }
                                                         Err(error) => {
                                                             self.last_restore = None;
-                                                            self.last_error =
-                                                                Some(error.to_string());
+                                                            self.last_error = Some(
+                                                                present_restore_error(
+                                                                    &error.to_string(),
+                                                                ),
+                                                            );
+                                                            self.last_notice = None;
                                                         }
                                                     }
                                                 }
@@ -2174,6 +2195,68 @@ impl eframe::App for WinRehomeApp {
                                                     "还没有恢复范围",
                                                     "先到“恢复范围”里选择至少一个已启用的根目录。",
                                                 );
+                                            } else if let Some(Err(error)) = &restore_preflight {
+                                                status_banner(
+                                                    ui,
+                                                    Color32::from_rgb(252, 233, 229),
+                                                    Color32::from_rgb(212, 122, 102),
+                                                    &present_restore_error(&error.to_string()),
+                                                );
+                                            } else if let Some(Ok(preflight)) = &restore_preflight {
+                                                if preflight.conflicting_files > 0 {
+                                                    let example_text = if preflight
+                                                        .conflict_examples
+                                                        .is_empty()
+                                                    {
+                                                        String::new()
+                                                    } else {
+                                                        format!(
+                                                            "\n示例：{}",
+                                                            preflight.conflict_examples.join("；")
+                                                        )
+                                                    };
+                                                    if self.skip_existing_restore_files {
+                                                        status_banner(
+                                                            ui,
+                                                            Color32::from_rgb(247, 243, 230),
+                                                            Color32::from_rgb(180, 150, 98),
+                                                            &format!(
+                                                                "预检：目标目录里已有 {} 个同名文件，本次会跳过这些文件，不会覆盖。{}",
+                                                                preflight.conflicting_files,
+                                                                example_text
+                                                            ),
+                                                        );
+                                                    } else {
+                                                        status_banner(
+                                                            ui,
+                                                            Color32::from_rgb(252, 233, 229),
+                                                            Color32::from_rgb(212, 122, 102),
+                                                            &format!(
+                                                                "预检：目标目录里已有 {} 个同名文件。按当前策略，恢复会在遇到第一个冲突时中止。可以改目录，或启用“跳过已存在文件”。{}",
+                                                                preflight.conflicting_files,
+                                                                example_text
+                                                            ),
+                                                        );
+                                                    }
+                                                } else {
+                                                    status_banner(
+                                                        ui,
+                                                        Color32::from_rgb(232, 239, 248),
+                                                        Color32::from_rgb(130, 155, 186),
+                                                        &format!(
+                                                            "预检：将恢复 {} 个范围中的 {} 个文件，目标目录{}。",
+                                                            restore_summary.selected_root_count,
+                                                            preflight.selected_files,
+                                                            if preflight.destination_exists
+                                                                && preflight.destination_is_directory
+                                                            {
+                                                                "已存在且没有同名冲突"
+                                                            } else {
+                                                                "将由 WinRehome 自动创建"
+                                                            }
+                                                        ),
+                                                    );
+                                                }
                                             } else {
                                                 status_banner(
                                                     ui,
@@ -2833,6 +2916,23 @@ fn current_stage_label(has_preview: bool, has_loaded_archive: bool) -> &'static 
         (true, false) => "正在审查扫描结果",
         (false, true) => "正在准备恢复已有归档",
         (false, false) => "等待开始第一次扫描",
+    }
+}
+
+fn present_restore_error(message: &str) -> String {
+    if message.contains("restore target already exists:") {
+        "恢复中止：目标目录里已经有同名文件。可以改用新的恢复目录，或启用“跳过已存在文件”。"
+            .to_string()
+    } else if message.contains("Archive does not contain any files to restore.") {
+        "当前恢复范围里没有可写出的文件。请先检查恢复范围选择。".to_string()
+    } else if message.contains("restore destination is an existing file:") {
+        "恢复目标无效：你选择的是一个文件，不是目录。请改成文件夹路径。".to_string()
+    } else if message.contains("failed to create restore destination") {
+        "无法创建恢复目录。请检查目标路径是否可写。".to_string()
+    } else if message.contains("escapes restore root") {
+        "归档内容校验失败：发现了越界路径，WinRehome 已阻止这次恢复。".to_string()
+    } else {
+        message.to_string()
     }
 }
 

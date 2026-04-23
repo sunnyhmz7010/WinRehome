@@ -23,6 +23,7 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 - Single-file `.wrh` archive writing with manifest validation
 - `.wrh` archive verification before restore with size and CRC checks
 - Restore to a target directory with category toggles and root-level selection
+- Restore preflight feedback for existing-file conflicts and invalid destination paths before execution
 - Restore conflict handling with fail-on-conflict by default and explicit skip-existing mode
 - Local config persistence for saved selections, backup output directory, and restore targets
 - Recent archive discovery for faster reopen and retry flows
