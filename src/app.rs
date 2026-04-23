@@ -2,12 +2,20 @@ use crate::{archive, config, plan};
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, RichText};
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 struct LoadedArchive {
     path: PathBuf,
     manifest: archive::ArchiveManifest,
+}
+
+#[derive(Debug, Clone)]
+struct InstalledAppExportRow {
+    display_name: String,
+    source: String,
+    install_location: Option<String>,
+    uninstall_key: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -66,6 +74,7 @@ pub struct WinRehomeApp {
     last_archive: Option<archive::BackupResult>,
     last_restore: Option<archive::RestoreResult>,
     last_verification: Option<archive::VerificationResult>,
+    last_notice: Option<String>,
     last_error: Option<String>,
 }
 
@@ -152,6 +161,7 @@ impl WinRehomeApp {
         self.scan_filter.clear();
         self.scan_section = ScanPlanSection::UserData;
         self.active_workspace = WorkspaceView::ScanPlan;
+        self.last_notice = None;
         self.last_error = None;
     }
 
@@ -174,6 +184,7 @@ impl WinRehomeApp {
                 self.skip_existing_restore_files = false;
                 self.last_verification = None;
                 self.last_restore = None;
+                self.last_notice = None;
                 self.last_error = None;
                 self.recent_archives = archive::list_recent_archives(8).unwrap_or_default();
                 let _ = self.persist_config();
@@ -200,6 +211,7 @@ impl WinRehomeApp {
         self.last_archive = None;
         self.last_verification = None;
         self.last_restore = None;
+        self.last_notice = None;
         self.last_error = None;
     }
 
@@ -383,6 +395,14 @@ impl eframe::App for WinRehomeApp {
                                 Color32::from_rgb(252, 233, 229),
                                 Color32::from_rgb(212, 122, 102),
                                 &format!("操作失败：{error}"),
+                            );
+                        }
+                        if let Some(notice) = &self.last_notice {
+                            status_banner(
+                                ui,
+                                Color32::from_rgb(232, 239, 248),
+                                Color32::from_rgb(108, 143, 184),
+                                notice,
                             );
                         }
                         if let Some(result) = &self.last_archive {
@@ -897,12 +917,85 @@ impl eframe::App for WinRehomeApp {
 
                             match self.scan_section {
                                 ScanPlanSection::InstalledApps => {
+                                    let filtered_scan_apps: Vec<InstalledAppExportRow> = preview
+                                        .installed_apps
+                                        .iter()
+                                        .filter_map(|app| {
+                                            let install_location = app
+                                                .install_location
+                                                .as_ref()
+                                                .map(|path| path.display().to_string())
+                                                .unwrap_or_default();
+                                            matches_filter(
+                                                &self.scan_filter,
+                                                &[
+                                                    &app.display_name,
+                                                    app.source,
+                                                    &app.uninstall_key,
+                                                    &install_location,
+                                                ],
+                                            )
+                                            .then(|| InstalledAppExportRow {
+                                                display_name: app.display_name.clone(),
+                                                source: app.source.to_string(),
+                                                install_location: (!install_location.trim().is_empty())
+                                                    .then_some(install_location),
+                                                uninstall_key: app.uninstall_key.clone(),
+                                            })
+                                        })
+                                        .collect();
                                     card_panel(
                                         ui,
                                         "已安装软件记录",
                                         "安装版软件只保留记录，不会把安装目录整体打包进归档。",
                                         |ui| {
-                                            section_counter(ui, "筛选命中", filtered_installed_count);
+                                            ui.horizontal_wrapped(|ui| {
+                                                section_counter(
+                                                    ui,
+                                                    "筛选命中",
+                                                    filtered_installed_count,
+                                                );
+                                                if ui
+                                                    .add(secondary_action_button("导出命中 CSV"))
+                                                    .clicked()
+                                                {
+                                                    let default_name = "WinRehome-installed-apps-scan.csv";
+                                                    match pick_inventory_export_path(
+                                                        default_name,
+                                                        Some(self.backup_output_input.trim()),
+                                                    )
+                                                    {
+                                                        Some(path) => {
+                                                            match export_installed_app_inventory_csv(
+                                                                &path,
+                                                                &filtered_scan_apps,
+                                                            ) {
+                                                                Ok(count) => {
+                                                                    self.last_notice = Some(format!(
+                                                                        "软件记录已导出：{}，共 {} 条。",
+                                                                        path.display(),
+                                                                        count
+                                                                    ));
+                                                                    self.last_error = None;
+                                                                }
+                                                                Err(error) => {
+                                                                    self.last_error = Some(
+                                                                        error.to_string(),
+                                                                    );
+                                                                    self.last_notice = None;
+                                                                }
+                                                            }
+                                                        }
+                                                        None if filtered_scan_apps.is_empty() => {
+                                                            self.last_error = Some(
+                                                                "当前没有可导出的软件记录。".to_string(),
+                                                            );
+                                                            self.last_notice = None;
+                                                        }
+                                                        None => {}
+                                                    }
+                                                }
+                                            });
                                             ui.add_space(8.0);
                                             if filtered_installed_count == 0 {
                                                 compact_empty_state(
@@ -1385,6 +1478,28 @@ impl eframe::App for WinRehomeApp {
 
                             match self.restore_section {
                                 RestoreSection::InstalledApps => {
+                                    let filtered_restore_apps: Vec<InstalledAppExportRow> = loaded
+                                        .manifest
+                                        .installed_apps
+                                        .iter()
+                                        .filter(|app| {
+                                            matches_filter(
+                                                &self.restore_inventory_filter,
+                                                &[
+                                                    &app.display_name,
+                                                    &app.source,
+                                                    &app.uninstall_key,
+                                                    &app.install_location.clone().unwrap_or_default(),
+                                                ],
+                                            )
+                                        })
+                                        .map(|app| InstalledAppExportRow {
+                                            display_name: app.display_name.clone(),
+                                            source: app.source.clone(),
+                                            install_location: app.install_location.clone(),
+                                            uninstall_key: app.uninstall_key.clone(),
+                                        })
+                                        .collect();
                                     card_panel(
                                         ui,
                                         "已安装软件记录",
@@ -1401,11 +1516,62 @@ impl eframe::App for WinRehomeApp {
                                                 );
                                             });
                                             ui.add_space(8.0);
-                                            section_counter(
-                                                ui,
-                                                "筛选命中",
-                                                filtered_restore_installed_count,
-                                            );
+                                            ui.horizontal_wrapped(|ui| {
+                                                section_counter(
+                                                    ui,
+                                                    "筛选命中",
+                                                    filtered_restore_installed_count,
+                                                );
+                                                if ui
+                                                    .add(secondary_action_button("导出命中 CSV"))
+                                                    .clicked()
+                                                {
+                                                    let archive_stem = loaded
+                                                        .path
+                                                        .file_stem()
+                                                        .and_then(|value| value.to_str())
+                                                        .unwrap_or("loaded-archive");
+                                                    let default_name = format!(
+                                                        "{archive_stem}-installed-apps.csv"
+                                                    );
+                                                    match pick_inventory_export_path(
+                                                        &default_name,
+                                                        loaded.path.parent().and_then(|path| {
+                                                            path.to_str()
+                                                        }),
+                                                    ) {
+                                                        Some(path) => {
+                                                            match export_installed_app_inventory_csv(
+                                                                &path,
+                                                                &filtered_restore_apps,
+                                                            ) {
+                                                                Ok(count) => {
+                                                                    self.last_notice = Some(format!(
+                                                                        "归档内的软件记录已导出：{}，共 {} 条。",
+                                                                        path.display(),
+                                                                        count
+                                                                    ));
+                                                                    self.last_error = None;
+                                                                }
+                                                                Err(error) => {
+                                                                    self.last_error = Some(
+                                                                        error.to_string(),
+                                                                    );
+                                                                    self.last_notice = None;
+                                                                }
+                                                            }
+                                                        }
+                                                        None if filtered_restore_apps.is_empty() => {
+                                                            self.last_error = Some(
+                                                                "当前没有可导出的归档软件记录。"
+                                                                    .to_string(),
+                                                            );
+                                                            self.last_notice = None;
+                                                        }
+                                                        None => {}
+                                                    }
+                                                }
+                                            });
                                             ui.add_space(8.0);
                                             if filtered_restore_installed_count == 0 {
                                                 compact_empty_state(
@@ -2077,6 +2243,55 @@ fn installed_app_record_card(
     });
 }
 
+fn pick_inventory_export_path(default_name: &str, directory_hint: Option<&str>) -> Option<PathBuf> {
+    let mut dialog = rfd::FileDialog::new().set_file_name(default_name);
+    if let Some(path) = directory_hint.and_then(path_for_picker) {
+        dialog = dialog.set_directory(path);
+    }
+    dialog.save_file()
+}
+
+fn export_installed_app_inventory_csv(
+    output_path: &Path,
+    rows: &[InstalledAppExportRow],
+) -> anyhow::Result<usize> {
+    if rows.is_empty() {
+        anyhow::bail!("there are no installed-app records to export");
+    }
+
+    let mut csv = String::from("DisplayName,Source,InstallLocation,RegistryKey\n");
+    for row in rows {
+        csv.push_str(&escape_csv_field(&row.display_name));
+        csv.push(',');
+        csv.push_str(&escape_csv_field(&row.source));
+        csv.push(',');
+        csv.push_str(&escape_csv_field(
+            row.install_location.as_deref().unwrap_or_default(),
+        ));
+        csv.push(',');
+        csv.push_str(&escape_csv_field(&row.uninstall_key));
+        csv.push('\n');
+    }
+
+    fs::write(output_path, csv).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to write installed-app inventory {}: {}",
+            output_path.display(),
+            error
+        )
+    })?;
+    Ok(rows.len())
+}
+
+fn escape_csv_field(value: &str) -> String {
+    let escaped = value.replace('"', "\"\"");
+    if escaped.contains([',', '"', '\n', '\r']) {
+        format!("\"{escaped}\"")
+    } else {
+        escaped
+    }
+}
+
 fn pick_folder_from_input(current_value: &str) -> Option<PathBuf> {
     let mut dialog = rfd::FileDialog::new();
     if let Some(path) = path_for_picker(current_value) {
@@ -2511,12 +2726,15 @@ fn portable_candidate_kind(root_path: &str, main_executable: &str) -> &'static s
 #[cfg(test)]
 mod tests {
     use super::{
-        LoadedArchive, build_restore_preview_summary, effective_restore_roots,
+        InstalledAppExportRow, LoadedArchive, build_restore_preview_summary,
+        effective_restore_roots, escape_csv_field, export_installed_app_inventory_csv,
         portable_candidate_kind, portable_restore_root_key, user_restore_root_key,
     };
     use crate::archive::{ArchiveManifest, ArchivedFileEntry, ManifestPortableApp, ManifestRoot};
     use std::collections::HashSet;
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn sample_loaded_archive() -> LoadedArchive {
         LoadedArchive {
@@ -2607,5 +2825,39 @@ mod tests {
             portable_candidate_kind("D:\\Tools\\Tool", "D:\\Tools\\Tool\\Tool.exe"),
             "目录型便携软件"
         );
+    }
+
+    #[test]
+    fn csv_field_escaping_wraps_quotes_and_commas() {
+        assert_eq!(escape_csv_field("plain"), "plain");
+        assert_eq!(escape_csv_field("with,comma"), "\"with,comma\"");
+        assert_eq!(escape_csv_field("with\"quote"), "\"with\"\"quote\"");
+    }
+
+    #[test]
+    fn installed_app_inventory_export_writes_csv() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let output_path =
+            std::env::temp_dir().join(format!("winrehome-installed-apps-{unique}.csv"));
+        let rows = vec![InstalledAppExportRow {
+            display_name: "Tool, One".to_string(),
+            source: "hkcu-64".to_string(),
+            install_location: Some("C:\\Tools\\Tool One".to_string()),
+            uninstall_key: "Tool\"One".to_string(),
+        }];
+
+        let count =
+            export_installed_app_inventory_csv(&output_path, &rows).expect("export inventory");
+        let csv = fs::read_to_string(&output_path).expect("read csv");
+
+        assert_eq!(count, 1);
+        assert!(csv.contains("DisplayName,Source,InstallLocation,RegistryKey"));
+        assert!(csv.contains("\"Tool, One\""));
+        assert!(csv.contains("\"Tool\"\"One\""));
+
+        let _ = fs::remove_file(output_path);
     }
 }
