@@ -177,10 +177,23 @@ impl WinRehomeApp {
                         (!self.archive_path_input.trim().is_empty())
                             .then(|| PathBuf::from(self.archive_path_input.trim()))
                     });
+                let previous_destination = self.restore_destination_input.clone();
+                let previous_restore_filter = self.restore_filter.clone();
+                let previous_restore_inventory_filter = self.restore_inventory_filter.clone();
+                let previous_restore_section = self.restore_section;
+                let previous_restore_user_data = self.restore_user_data;
+                let previous_restore_portable_apps = self.restore_portable_apps;
+                let previous_skip_existing_restore_files = self.skip_existing_restore_files;
                 let previous_restore_roots = self.selected_restore_roots.clone();
-                self.restore_destination_input = archive::default_restore_dir(&path)
-                    .map(|value| value.display().to_string())
-                    .unwrap_or_default();
+                let same_archive_reload = previous_archive_path
+                    .as_deref()
+                    .map(|previous| same_archive_path(previous, &path))
+                    .unwrap_or(false);
+                self.restore_destination_input = restore_destination_for_loaded_archive(
+                    &path,
+                    same_archive_reload,
+                    &previous_destination,
+                );
                 self.archive_path_input = path.display().to_string();
                 let loaded = LoadedArchive { path, manifest };
                 self.selected_restore_roots = restore_roots_for_loaded_archive(
@@ -189,13 +202,28 @@ impl WinRehomeApp {
                     &previous_restore_roots,
                 );
                 self.loaded_archive = Some(loaded);
-                self.restore_filter.clear();
-                self.restore_inventory_filter.clear();
-                self.restore_section = RestoreSection::RestoreScope;
+                self.restore_filter = restore_text_filter_for_loaded_archive(
+                    same_archive_reload,
+                    &previous_restore_filter,
+                );
+                self.restore_inventory_filter = restore_text_filter_for_loaded_archive(
+                    same_archive_reload,
+                    &previous_restore_inventory_filter,
+                );
+                self.restore_section = restore_section_for_loaded_archive(
+                    same_archive_reload,
+                    previous_restore_section,
+                );
                 self.active_workspace = WorkspaceView::Restore;
-                self.restore_user_data = true;
-                self.restore_portable_apps = true;
-                self.skip_existing_restore_files = false;
+                let restored_flags = restore_flags_for_loaded_archive(
+                    same_archive_reload,
+                    previous_restore_user_data,
+                    previous_restore_portable_apps,
+                    previous_skip_existing_restore_files,
+                );
+                self.restore_user_data = restored_flags.0;
+                self.restore_portable_apps = restored_flags.1;
+                self.skip_existing_restore_files = restored_flags.2;
                 self.last_verification = None;
                 self.last_restore = None;
                 self.last_notice = None;
@@ -3039,6 +3067,59 @@ fn restore_roots_for_loaded_archive(
     collect_restore_roots(loaded)
 }
 
+fn restore_destination_for_loaded_archive(
+    archive_path: &Path,
+    same_archive_reload: bool,
+    previous_destination: &str,
+) -> String {
+    if same_archive_reload && !previous_destination.trim().is_empty() {
+        previous_destination.trim().to_string()
+    } else {
+        archive::default_restore_dir(archive_path)
+            .map(|value| value.display().to_string())
+            .unwrap_or_default()
+    }
+}
+
+fn restore_text_filter_for_loaded_archive(
+    same_archive_reload: bool,
+    previous_filter: &str,
+) -> String {
+    if same_archive_reload {
+        previous_filter.to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn restore_section_for_loaded_archive(
+    same_archive_reload: bool,
+    previous_section: RestoreSection,
+) -> RestoreSection {
+    if same_archive_reload {
+        previous_section
+    } else {
+        RestoreSection::RestoreScope
+    }
+}
+
+fn restore_flags_for_loaded_archive(
+    same_archive_reload: bool,
+    previous_restore_user_data: bool,
+    previous_restore_portable_apps: bool,
+    previous_skip_existing_restore_files: bool,
+) -> (bool, bool, bool) {
+    if same_archive_reload {
+        (
+            previous_restore_user_data,
+            previous_restore_portable_apps,
+            previous_skip_existing_restore_files,
+        )
+    } else {
+        (true, true, false)
+    }
+}
+
 fn same_archive_path(left: &Path, right: &Path) -> bool {
     left.as_os_str()
         .to_string_lossy()
@@ -3108,7 +3189,9 @@ mod tests {
     use super::{
         InstalledAppExportRow, LoadedArchive, build_restore_preview_summary,
         effective_restore_roots, escape_csv_field, export_installed_app_inventory_csv,
-        portable_candidate_kind, portable_restore_root_key, restore_roots_for_loaded_archive,
+        portable_candidate_kind, portable_restore_root_key, restore_destination_for_loaded_archive,
+        restore_flags_for_loaded_archive, restore_roots_for_loaded_archive,
+        restore_section_for_loaded_archive, restore_text_filter_for_loaded_archive,
         user_restore_root_key,
     };
     use crate::archive::{ArchiveManifest, ArchivedFileEntry, ManifestPortableApp, ManifestRoot};
@@ -3278,5 +3361,39 @@ mod tests {
         );
 
         assert_eq!(restored, super::collect_restore_roots(&loaded));
+    }
+
+    #[test]
+    fn same_archive_reload_keeps_restore_destination_and_flags() {
+        let archive_path = PathBuf::from("C:\\Backups\\sample.wrh");
+
+        let destination =
+            restore_destination_for_loaded_archive(&archive_path, true, "D:\\My Restore Target");
+        let flags = restore_flags_for_loaded_archive(true, false, true, true);
+        let section =
+            restore_section_for_loaded_archive(true, super::RestoreSection::InstalledApps);
+        let filter = restore_text_filter_for_loaded_archive(true, "portable");
+
+        assert_eq!(destination, "D:\\My Restore Target");
+        assert_eq!(flags, (false, true, true));
+        assert_eq!(section, super::RestoreSection::InstalledApps);
+        assert_eq!(filter, "portable");
+    }
+
+    #[test]
+    fn different_archive_reload_resets_restore_runtime_state() {
+        let archive_path = PathBuf::from("C:\\Backups\\sample.wrh");
+
+        let destination =
+            restore_destination_for_loaded_archive(&archive_path, false, "D:\\Old Restore");
+        let flags = restore_flags_for_loaded_archive(false, false, false, true);
+        let section =
+            restore_section_for_loaded_archive(false, super::RestoreSection::InstalledApps);
+        let filter = restore_text_filter_for_loaded_archive(false, "portable");
+
+        assert!(destination.ends_with("WinRehome Restores\\sample"));
+        assert_eq!(flags, (true, true, false));
+        assert_eq!(section, super::RestoreSection::RestoreScope);
+        assert!(filter.is_empty());
     }
 }
