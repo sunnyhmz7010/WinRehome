@@ -338,36 +338,36 @@ pub fn configure_egui(ctx: &egui::Context) {
 fn configure_visual_style(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
     style.spacing.item_spacing = egui::vec2(12.0, 10.0);
-    style.spacing.button_padding = egui::vec2(14.0, 10.0);
+    style.spacing.button_padding = egui::vec2(14.0, 9.0);
     style.spacing.menu_margin = egui::Margin::same(12);
     style.spacing.window_margin = egui::Margin::same(16);
     style.spacing.indent = 18.0;
 
     style.visuals = {
         let mut visuals = egui::Visuals::light();
-        visuals.override_text_color = Some(Color32::from_rgb(28, 43, 38));
-        visuals.panel_fill = Color32::from_rgb(244, 248, 244);
-        visuals.extreme_bg_color = Color32::from_rgb(234, 241, 236);
-        visuals.window_fill = Color32::from_rgb(252, 253, 250);
-        visuals.window_stroke = egui::Stroke::new(1.0, Color32::from_rgb(202, 214, 205));
-        visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(252, 253, 250);
+        visuals.override_text_color = Some(Color32::from_rgb(28, 34, 43));
+        visuals.panel_fill = Color32::from_rgb(245, 247, 250);
+        visuals.extreme_bg_color = Color32::from_rgb(234, 239, 246);
+        visuals.window_fill = Color32::from_rgb(252, 253, 255);
+        visuals.window_stroke = egui::Stroke::new(1.0, Color32::from_rgb(205, 213, 224));
+        visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(252, 253, 255);
         visuals.widgets.noninteractive.bg_stroke =
-            egui::Stroke::new(1.0, Color32::from_rgb(208, 219, 210));
-        visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(18);
-        visuals.widgets.inactive.bg_fill = Color32::from_rgb(245, 249, 246);
+            egui::Stroke::new(1.0, Color32::from_rgb(214, 220, 230));
+        visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(14);
+        visuals.widgets.inactive.bg_fill = Color32::from_rgb(247, 249, 252);
         visuals.widgets.inactive.bg_stroke =
-            egui::Stroke::new(1.0, Color32::from_rgb(181, 202, 188));
-        visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(14);
-        visuals.widgets.hovered.bg_fill = Color32::from_rgb(232, 242, 235);
-        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, Color32::from_rgb(92, 138, 110));
-        visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(14);
-        visuals.widgets.active.bg_fill = Color32::from_rgb(94, 138, 112);
-        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, Color32::from_rgb(68, 107, 84));
+            egui::Stroke::new(1.0, Color32::from_rgb(192, 203, 219));
+        visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(10);
+        visuals.widgets.hovered.bg_fill = Color32::from_rgb(237, 243, 251);
+        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, Color32::from_rgb(96, 134, 188));
+        visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(10);
+        visuals.widgets.active.bg_fill = Color32::from_rgb(0, 103, 192);
+        visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, Color32::from_rgb(0, 79, 150));
         visuals.widgets.active.fg_stroke = egui::Stroke::new(1.5, Color32::WHITE);
-        visuals.widgets.active.corner_radius = egui::CornerRadius::same(14);
-        visuals.selection.bg_fill = Color32::from_rgb(138, 176, 151);
-        visuals.selection.stroke = egui::Stroke::new(1.0, Color32::from_rgb(58, 91, 72));
-        visuals.hyperlink_color = Color32::from_rgb(62, 110, 148);
+        visuals.widgets.active.corner_radius = egui::CornerRadius::same(10);
+        visuals.selection.bg_fill = Color32::from_rgb(190, 216, 247);
+        visuals.selection.stroke = egui::Stroke::new(1.0, Color32::from_rgb(0, 94, 177));
+        visuals.hyperlink_color = Color32::from_rgb(0, 94, 177);
         visuals
     };
 
@@ -396,12 +396,12 @@ fn load_windows_cjk_font() -> Option<Vec<u8>> {
 impl eframe::App for WinRehomeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::TopBottomPanel::top("hero_panel")
-            .exact_height(196.0)
+            .exact_height(134.0)
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(Color32::from_rgb(224, 237, 227))
-                    .stroke(egui::Stroke::new(1.0, Color32::from_rgb(175, 198, 181)))
-                    .inner_margin(egui::Margin::symmetric(22, 16))
+                    .fill(Color32::from_rgb(233, 239, 247))
+                    .stroke(egui::Stroke::new(1.0, Color32::from_rgb(197, 208, 222)))
+                    .inner_margin(egui::Margin::symmetric(20, 14))
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
                             hero_identity(
@@ -412,7 +412,7 @@ impl eframe::App for WinRehomeApp {
                                 !self.selected_user_roots.is_empty()
                                     || !self.selected_portable_apps.is_empty(),
                             );
-                            ui.add_space(10.0);
+                            ui.add_space(8.0);
                             ui.horizontal_wrapped(|ui| {
                                 hero_primary_actions(self, ui);
                             });
@@ -422,7 +422,7 @@ impl eframe::App for WinRehomeApp {
 
         egui::SidePanel::left("overview_panel")
             .resizable(false)
-            .exact_width(236.0)
+            .exact_width(220.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -430,7 +430,7 @@ impl eframe::App for WinRehomeApp {
                         card_panel(
                             ui,
                             "当前阶段",
-                            "先扫描，再审查，再归档，最后恢复。",
+                            "先扫描或加载归档，再进入对应的向导流程。",
                             |ui| {
                                 ui.label(format!(
                                     "当前工作：{}",
@@ -530,7 +530,7 @@ impl eframe::App for WinRehomeApp {
                         card_panel(
                             ui,
                             "可靠性原则",
-                            "默认宁可保守，也不把不该迁移的内容带进归档。",
+                            "数据安全优先于压缩率和扫描激进度。",
                             |ui| {
                                 principle_row(ui, "已安装软件只记录，不打包程序本体");
                                 principle_row(ui, "便携软件先审查，再进入归档");
@@ -585,37 +585,21 @@ impl eframe::App for WinRehomeApp {
                     if matches!(resolved_workspace, WorkspaceView::Overview) {
                         card_panel(
                             ui,
-                            "总览",
-                            "WinRehome 不做整盘镜像，而是把真正值得迁移的内容整理成单文件归档。",
+                            "欢迎使用 WinRehome",
+                            "一个面向 Windows 的迁移备份工具，目标是在尽可能节省备份空间的前提下，保留真正有迁移价值的个人数据。",
                             |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    metric_tile(
-                                        ui,
-                                        Color32::from_rgb(231, 240, 233),
-                                        "步骤 1",
-                                        "扫描已安装软件、便携候选和高价值用户目录",
-                                    );
-                                    metric_tile(
-                                        ui,
-                                        Color32::from_rgb(241, 237, 227),
-                                        "步骤 2",
-                                        "审查候选项，只保留真正值得迁移的内容",
-                                    );
-                                    metric_tile(
-                                        ui,
-                                        Color32::from_rgb(233, 238, 245),
-                                        "步骤 3",
-                                        "生成 `.wrh` 归档并在新系统中恢复",
-                                    );
-                                });
-
-                                ui.add_space(12.0);
+                                wizard_stepper(
+                                    ui,
+                                    &["1 生成扫描预览", "2 审核内容", "3 生成或恢复 `.wrh`"],
+                                    0,
+                                );
+                                ui.add_space(14.0);
                                 ui.columns(2, |columns| {
                                     quick_action_card(
                                         &mut columns[0],
-                                        "开始新扫描",
-                                        "重新评估当前机器上的个人目录、便携候选和已安装软件记录。",
-                                        "进入扫描计划",
+                                        "创建备份",
+                                        "扫描个人文件、便携软件和已安装软件记录，然后整理成单一 `.wrh` 归档。",
+                                        "开始扫描",
                                         || {
                                             match plan::build_preview() {
                                                 Ok(preview) => self.load_preview(preview),
@@ -629,8 +613,8 @@ impl eframe::App for WinRehomeApp {
 
                                     quick_action_card(
                                         &mut columns[1],
-                                        "打开最近归档",
-                                        "直接进入恢复工作区，查看内容、校验完整性并准备恢复。",
+                                        "恢复备份",
+                                        "打开现有 `.wrh` 归档，查看内容、导出已安装软件清单，并恢复个人文件与便携软件。",
                                         "加载最新归档",
                                         || {
                                             self.refresh_recent_archives();
@@ -648,39 +632,47 @@ impl eframe::App for WinRehomeApp {
                                     );
                                 });
 
+                                ui.add_space(14.0);
+                                status_banner(
+                                    ui,
+                                    Color32::from_rgb(235, 242, 251),
+                                    Color32::from_rgb(179, 201, 231),
+                                    "安全提示：已安装软件只保留记录，不会备份程序本体。只有你选择的个人文件和便携软件会进入归档。",
+                                );
+
                                 if let Some(preview) = &self.preview {
                                     let scan_summary = preview.summarize_selection(
                                         &self.selected_user_roots,
                                         &self.selected_portable_apps,
                                     );
-                                    ui.add_space(10.0);
+                                    ui.add_space(14.0);
                                     ui.label(RichText::new("最近一次扫描").strong());
                                     ui.horizontal_wrapped(|ui| {
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(239, 244, 231),
-                                            "用户目录",
+                                            Color32::from_rgb(245, 248, 252),
+                                            "个人文件",
                                             &preview.user_data_roots.len().to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(231, 240, 233),
+                                            Color32::from_rgb(244, 248, 252),
                                             "便携候选",
                                             &preview.portable_candidates.len().to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(233, 238, 245),
-                                            "软件记录",
+                                            Color32::from_rgb(244, 248, 252),
+                                            "已安装软件记录",
                                             &preview.installed_apps.len().to_string(),
                                         );
                                     });
                                     ui.add_space(8.0);
                                     card_panel(
                                         ui,
-                                        "扫描结果已就绪",
+                                        "继续创建备份",
                                         &format!(
-                                            "当前已选 {} 个用户目录、{} 个便携软件，预计 {} 个文件。",
+                                            "当前已选 {} 个个人目录、{} 个便携软件，预计 {} 个文件。",
                                             scan_summary.selected_user_roots,
                                             scan_summary.selected_portable_apps,
                                             scan_summary.total_files
@@ -717,25 +709,25 @@ impl eframe::App for WinRehomeApp {
                                 }
                                 if let Some(loaded) = &self.loaded_archive {
                                     let loaded_archive_name = archive_file_label(&loaded.path);
-                                    ui.add_space(10.0);
+                                    ui.add_space(14.0);
                                     ui.label(RichText::new("当前已加载归档").strong());
                                     ui.horizontal_wrapped(|ui| {
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(233, 238, 245),
+                                            Color32::from_rgb(245, 248, 252),
                                             "归档文件数",
                                             &loaded.manifest.files.len().to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(245, 240, 233),
+                                            Color32::from_rgb(245, 248, 252),
                                             "归档大小",
                                             &format_bytes(loaded.manifest.stored_bytes),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(240, 247, 241),
-                                            "软件记录",
+                                            Color32::from_rgb(245, 248, 252),
+                                            "已安装软件记录",
                                             &loaded.manifest.installed_apps.len().to_string(),
                                         );
                                     });
@@ -774,6 +766,35 @@ impl eframe::App for WinRehomeApp {
                                                     self.restore_section = RestoreSection::RestoreAction;
                                                 }
                                             });
+                                        },
+                                    );
+                                }
+
+                                if !self.recent_archives.is_empty() {
+                                    ui.add_space(14.0);
+                                    card_panel(
+                                        ui,
+                                        "最近归档",
+                                        "双击前的常见入口。这里只列最近找到的 `.wrh` 文件。",
+                                        |ui| {
+                                            for path in self
+                                                .recent_archives
+                                                .clone()
+                                                .into_iter()
+                                                .take(4)
+                                            {
+                                                let file_name = archive_file_label(&path);
+                                                let archive_meta = recent_archive_meta(&path);
+                                                result_card(ui, &file_name, &archive_meta, |ui| {
+                                                    if ui
+                                                        .add(secondary_action_button("打开"))
+                                                        .clicked()
+                                                    {
+                                                        self.load_archive_from_path(path.clone());
+                                                    }
+                                                });
+                                                ui.add_space(6.0);
+                                            }
                                         },
                                     );
                                 }
@@ -869,39 +890,61 @@ impl eframe::App for WinRehomeApp {
 
                             card_panel(
                                 ui,
-                                "扫描计划",
-                                "先筛选，再审查，最后输出到你指定的备份目录。",
+                                "创建备份",
+                                "先生成扫描预览，再审核真正有迁移价值的内容，最后输出到你指定的备份目录。",
                                 |ui| {
+                                    wizard_stepper(
+                                        ui,
+                                        &["1 生成扫描预览", "2 审核备份内容", "3 输出设置"],
+                                        1,
+                                    );
+                                    ui.add_space(10.0);
                                     ui.horizontal_wrapped(|ui| {
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(231, 240, 233),
-                                            "软件记录",
+                                            Color32::from_rgb(245, 248, 252),
+                                            "已安装软件记录",
                                             &preview.installed_apps.len().to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(239, 244, 231),
+                                            Color32::from_rgb(245, 248, 252),
                                             "便携候选",
                                             &preview.portable_candidates.len().to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(233, 238, 245),
-                                            "用户目录",
+                                            Color32::from_rgb(245, 248, 252),
+                                            "个人文件",
                                             &preview.user_data_roots.len().to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(245, 240, 233),
+                                            Color32::from_rgb(245, 248, 252),
                                             "排除规则",
                                             &preview.exclusion_rules.len().to_string(),
                                         );
                                     });
 
                                     ui.add_space(10.0);
+                                    ui.label(RichText::new("步骤 1：扫描结果来源").strong());
+                                    ui.small("当前预览来自本机扫描结果。修改选择后可以直接重新扫描，再继续审核。");
                                     ui.horizontal_wrapped(|ui| {
-                                        ui.label("统一筛选");
+                                        if ui.add(secondary_action_button("重新扫描")).clicked() {
+                                            match plan::build_preview() {
+                                                Ok(preview) => self.load_preview(preview),
+                                                Err(error) => {
+                                                    self.last_archive = None;
+                                                    self.last_error = Some(error.to_string());
+                                                    self.last_notice = None;
+                                                }
+                                            }
+                                        }
+                                    });
+
+                                    ui.add_space(10.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label("步骤 2：统一筛选");
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.scan_filter)
                                                 .desired_width(320.0)
@@ -909,8 +952,9 @@ impl eframe::App for WinRehomeApp {
                                         );
                                     });
 
+                                    ui.add_space(6.0);
                                     ui.horizontal_wrapped(|ui| {
-                                        ui.label("备份输出目录");
+                                        ui.label("步骤 3：备份输出目录");
                                         if ui
                                             .add(
                                                 egui::TextEdit::singleline(
@@ -1095,25 +1139,25 @@ impl eframe::App for WinRehomeApp {
                                     ui.horizontal_wrapped(|ui| {
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(252, 248, 236),
-                                            "已选用户目录",
+                                            Color32::from_rgb(245, 248, 252),
+                                            "已选个人目录",
                                             &summary.selected_user_roots.to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(240, 247, 241),
+                                            Color32::from_rgb(245, 248, 252),
                                             "已选便携软件",
                                             &summary.selected_portable_apps.to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(238, 243, 249),
+                                            Color32::from_rgb(245, 248, 252),
                                             "预计文件数",
                                             &summary.total_files.to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(245, 240, 233),
+                                            Color32::from_rgb(245, 248, 252),
                                             "预计大小",
                                             &format_bytes(summary.total_bytes),
                                         );
@@ -1258,7 +1302,7 @@ impl eframe::App for WinRehomeApp {
                                 ScanPlanSection::PortableApps => {
                                     card_panel(
                                         ui,
-                                        "便携软件候选",
+                                        "便携软件",
                                         "这一栏只处理真正可随文件夹迁移的程序，包括目录型和单文件 EXE。",
                                         |ui| {
                                             ui.horizontal_wrapped(|ui| {
@@ -1382,7 +1426,7 @@ impl eframe::App for WinRehomeApp {
                                 ScanPlanSection::UserData => {
                                     card_panel(
                                         ui,
-                                        "用户数据目录",
+                                        "个人文件",
                                         "优先保留真正有迁移价值的个人文件与配置，而不是把整块系统噪音一起带走。",
                                         |ui| {
                                             ui.horizontal_wrapped(|ui| {
@@ -1591,31 +1635,45 @@ impl eframe::App for WinRehomeApp {
 
                             card_panel(
                                 ui,
-                                "归档恢复",
-                                "把“查看软件记录”“选择恢复范围”“执行恢复”拆开，避免所有控件挤在同一屏。",
+                                "恢复备份",
+                                "先选择 `.wrh` 归档并查看内容，再确认恢复范围和目标目录，最后执行恢复。",
                                 |ui| {
+                                    let active_restore_step = if matches!(
+                                        self.restore_section,
+                                        RestoreSection::RestoreAction
+                                    ) {
+                                        2
+                                    } else {
+                                        1
+                                    };
+                                    wizard_stepper(
+                                        ui,
+                                        &["1 选择备份", "2 查看备份内容", "3 执行恢复"],
+                                        active_restore_step,
+                                    );
+                                    ui.add_space(10.0);
                                     ui.horizontal_wrapped(|ui| {
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(233, 238, 245),
+                                            Color32::from_rgb(245, 248, 252),
                                             "归档大小",
                                             &format_bytes(loaded.manifest.stored_bytes),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(241, 247, 241),
-                                            "软件记录",
+                                            Color32::from_rgb(245, 248, 252),
+                                            "已安装软件记录",
                                             &loaded.manifest.installed_apps.len().to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(252, 248, 236),
-                                            "用户目录",
+                                            Color32::from_rgb(245, 248, 252),
+                                            "个人文件目录",
                                             &loaded.manifest.selected_user_roots.len().to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(245, 240, 233),
+                                            Color32::from_rgb(245, 248, 252),
                                             "便携软件",
                                             &loaded
                                                 .manifest
@@ -1627,7 +1685,7 @@ impl eframe::App for WinRehomeApp {
 
                                     ui.add_space(10.0);
                                     ui.horizontal_wrapped(|ui| {
-                                        ui.label("归档文件");
+                                        ui.label("步骤 1：归档文件");
                                         if ui
                                             .add(
                                                 egui::TextEdit::singleline(
@@ -1682,13 +1740,13 @@ impl eframe::App for WinRehomeApp {
                                     ui.horizontal_wrapped(|ui| {
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(252, 248, 236),
+                                            Color32::from_rgb(245, 248, 252),
                                             "已选个人目录",
                                             &restore_summary.selected_user_root_count.to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(240, 247, 241),
+                                            Color32::from_rgb(245, 248, 252),
                                             "已选便携软件",
                                             &restore_summary
                                                 .selected_portable_app_count
@@ -1696,13 +1754,13 @@ impl eframe::App for WinRehomeApp {
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(238, 243, 249),
+                                            Color32::from_rgb(245, 248, 252),
                                             "预计恢复文件",
                                             &restore_summary.selected_file_count.to_string(),
                                         );
                                         metric_tile(
                                             ui,
-                                            Color32::from_rgb(245, 240, 233),
+                                            Color32::from_rgb(245, 248, 252),
                                             "预计恢复大小",
                                             &format_bytes(restore_summary.selected_bytes),
                                         );
@@ -1738,16 +1796,24 @@ impl eframe::App for WinRehomeApp {
                                         .collect();
                                     card_panel(
                                         ui,
-                                        "已安装软件记录",
-                                        "这些项目只作为重装参考清单，不会从归档里恢复程序本体。",
+                                        "步骤 2：查看备份内容",
+                                        "恢复前先确认归档里有哪些个人文件、便携软件和已安装软件记录。",
                                         |ui| {
                                             ui.horizontal_wrapped(|ui| {
+                                                ui.label("内容筛选");
+                                                ui.add(
+                                                    egui::TextEdit::singleline(
+                                                        &mut self.restore_filter,
+                                                    )
+                                                    .desired_width(280.0)
+                                                    .hint_text("按名称或路径过滤个人文件与便携软件"),
+                                                );
                                                 ui.label("软件记录筛选");
                                                 ui.add(
                                                     egui::TextEdit::singleline(
                                                         &mut self.restore_inventory_filter,
                                                     )
-                                                    .desired_width(320.0)
+                                                    .desired_width(240.0)
                                                     .hint_text("按软件名、来源或安装路径过滤"),
                                                 );
                                             });
@@ -1755,7 +1821,17 @@ impl eframe::App for WinRehomeApp {
                                             ui.horizontal_wrapped(|ui| {
                                                 section_counter(
                                                     ui,
-                                                    "筛选命中",
+                                                    "个人文件",
+                                                    filtered_restore_user_count,
+                                                );
+                                                section_counter(
+                                                    ui,
+                                                    "便携软件",
+                                                    filtered_restore_portable_count,
+                                                );
+                                                section_counter(
+                                                    ui,
+                                                    "软件记录",
                                                     filtered_restore_installed_count,
                                                 );
                                                 if ui
@@ -1809,54 +1885,157 @@ impl eframe::App for WinRehomeApp {
                                                 }
                                             });
                                             ui.add_space(8.0);
-                                            if filtered_restore_installed_count == 0 {
-                                                compact_empty_state(
-                                                    ui,
-                                                    "没有命中的软件记录",
-                                                    "调整筛选词后，可以在这里查看安装版软件清单。",
+                                            ui.columns(3, |columns| {
+                                                review_list_panel(
+                                                    &mut columns[0],
+                                                    "个人文件",
+                                                    "这些目录和文件会参与恢复范围选择。",
+                                                    340.0,
+                                                    |ui| {
+                                                        if filtered_restore_user_count == 0 {
+                                                            compact_empty_state(
+                                                                ui,
+                                                                "没有命中的个人文件",
+                                                                "调整筛选词后，这里会显示归档里的个人文件目录。",
+                                                            );
+                                                        } else {
+                                                            for root in
+                                                                &loaded.manifest.selected_user_roots
+                                                            {
+                                                                if !matches_filter(
+                                                                    &self.restore_filter,
+                                                                    &[
+                                                                        &root.label,
+                                                                        &root.category,
+                                                                        &root.path,
+                                                                    ],
+                                                                ) {
+                                                                    continue;
+                                                                }
+                                                                result_card(
+                                                                    ui,
+                                                                    &root.label,
+                                                                    &root.category,
+                                                                    |ui| {
+                                                                        ui.small(format!(
+                                                                            "路径：{}",
+                                                                            root.path
+                                                                        ));
+                                                                    },
+                                                                );
+                                                                ui.add_space(6.0);
+                                                            }
+                                                        }
+                                                    },
                                                 );
-                                            } else {
-                                                egui::ScrollArea::vertical()
-                                                    .max_height(460.0)
-                                                    .show(ui, |ui| {
-                                                        for app in loaded
-                                                            .manifest
-                                                            .installed_apps
-                                                            .iter()
-                                                            .take(160)
-                                                        {
-                                                            if !matches_filter(
-                                                                &self.restore_inventory_filter,
-                                                                &[
+
+                                                review_list_panel(
+                                                    &mut columns[1],
+                                                    "便携软件",
+                                                    "这些项目可随归档一起恢复。",
+                                                    340.0,
+                                                    |ui| {
+                                                        if filtered_restore_portable_count == 0 {
+                                                            compact_empty_state(
+                                                                ui,
+                                                                "没有命中的便携软件",
+                                                                "当前筛选词下，没有命中的便携软件。",
+                                                            );
+                                                        } else {
+                                                            for app in
+                                                                &loaded.manifest.selected_portable_apps
+                                                            {
+                                                                if !matches_filter(
+                                                                    &self.restore_filter,
+                                                                    &[
+                                                                        &app.display_name,
+                                                                        &app.root_path,
+                                                                        &app.main_executable,
+                                                                    ],
+                                                                ) {
+                                                                    continue;
+                                                                }
+                                                                result_card(
+                                                                    ui,
+                                                                    &app.display_name,
+                                                                    "便携软件",
+                                                                    |ui| {
+                                                                        ui.small(format!(
+                                                                            "路径：{}",
+                                                                            app.root_path
+                                                                        ));
+                                                                        ui.small(format!(
+                                                                            "主程序：{}",
+                                                                            app.main_executable
+                                                                        ));
+                                                                    },
+                                                                );
+                                                                ui.add_space(6.0);
+                                                            }
+                                                        }
+                                                    },
+                                                );
+
+                                                review_list_panel(
+                                                    &mut columns[2],
+                                                    "已安装软件记录",
+                                                    "仅查看和导出，不参与文件恢复。",
+                                                    340.0,
+                                                    |ui| {
+                                                        if filtered_restore_installed_count == 0 {
+                                                            compact_empty_state(
+                                                                ui,
+                                                                "没有命中的软件记录",
+                                                                "调整筛选词后，可以在这里查看安装版软件清单。",
+                                                            );
+                                                        } else {
+                                                            status_banner(
+                                                                ui,
+                                                                Color32::from_rgb(235, 242, 251),
+                                                                Color32::from_rgb(179, 201, 231),
+                                                                "这些软件需要在新系统中手动重新安装，WinRehome 只保留清单记录。",
+                                                            );
+                                                            ui.add_space(8.0);
+                                                            for app in loaded
+                                                                .manifest
+                                                                .installed_apps
+                                                                .iter()
+                                                                .take(160)
+                                                            {
+                                                                if !matches_filter(
+                                                                    &self.restore_inventory_filter,
+                                                                    &[
+                                                                        &app.display_name,
+                                                                        &app.source,
+                                                                        &app.uninstall_key,
+                                                                        &app
+                                                                            .install_location
+                                                                            .clone()
+                                                                            .unwrap_or_default(),
+                                                                    ],
+                                                                ) {
+                                                                    continue;
+                                                                }
+                                                                installed_app_record_card(
+                                                                    ui,
                                                                     &app.display_name,
                                                                     &app.source,
+                                                                    app.install_location.clone(),
                                                                     &app.uninstall_key,
-                                                                    &app
-                                                                        .install_location
-                                                                        .clone()
-                                                                        .unwrap_or_default(),
-                                                                ],
-                                                            ) {
-                                                                continue;
+                                                                );
+                                                                ui.add_space(6.0);
                                                             }
-                                                            installed_app_record_card(
-                                                                ui,
-                                                                &app.display_name,
-                                                                &app.source,
-                                                                app.install_location.clone(),
-                                                                &app.uninstall_key,
-                                                            );
-                                                            ui.add_space(6.0);
                                                         }
-                                                    });
-                                            }
+                                                    },
+                                                );
+                                            });
                                         },
                                     );
                                 }
                                 RestoreSection::RestoreScope => {
                                     card_panel(
                                         ui,
-                                        "恢复范围",
+                                        "步骤 3：选择恢复范围",
                                         "先决定恢复哪些类别和哪些具体根目录，再进入执行恢复。",
                                         |ui| {
                                             ui.horizontal_wrapped(|ui| {
@@ -2087,7 +2266,7 @@ impl eframe::App for WinRehomeApp {
                                 RestoreSection::RestoreAction => {
                                     card_panel(
                                         ui,
-                                        "执行恢复",
+                                        "步骤 3：执行恢复",
                                         "最后确认目标目录和安全策略，然后开始恢复。",
                                         |ui| {
                                             ui.horizontal_wrapped(|ui| {
@@ -2369,19 +2548,19 @@ fn card_panel(
     add_contents: impl FnOnce(&mut egui::Ui),
 ) {
     egui::Frame::new()
-        .fill(Color32::from_rgb(252, 253, 250))
-        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(205, 216, 208)))
-        .corner_radius(egui::CornerRadius::same(18))
+        .fill(Color32::from_rgb(252, 253, 255))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(211, 218, 228)))
+        .corner_radius(egui::CornerRadius::same(12))
         .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(title)
                     .size(19.0)
                     .strong()
-                    .color(Color32::from_rgb(27, 47, 37)),
+                    .color(Color32::from_rgb(32, 39, 49)),
             );
             if !subtitle.is_empty() {
-                ui.label(RichText::new(subtitle).color(Color32::from_rgb(92, 109, 99)));
+                ui.label(RichText::new(subtitle).color(Color32::from_rgb(89, 97, 111)));
                 ui.add_space(8.0);
             }
             add_contents(ui);
@@ -2399,11 +2578,11 @@ fn hero_identity(
         RichText::new("WinRehome")
             .size(26.0)
             .strong()
-            .color(Color32::from_rgb(24, 45, 36)),
+            .color(Color32::from_rgb(32, 39, 49)),
     );
     ui.label(
         RichText::new("一个尽量节省空间的 Windows 迁移备份工具，只保留真正值得迁移的数据。")
-            .color(Color32::from_rgb(72, 96, 82)),
+            .color(Color32::from_rgb(89, 97, 111)),
     );
     ui.add_space(8.0);
     ui.horizontal_wrapped(|ui| {
@@ -2432,11 +2611,15 @@ fn hero_primary_actions(app: &mut WinRehomeApp, ui: &mut egui::Ui) {
         }
     }
 
-    if ui.add(secondary_action_button("清空选择")).clicked() {
+    if ui.add(secondary_action_button("回到总览")).clicked() {
+        app.active_workspace = WorkspaceView::Overview;
+    }
+
+    if ui.add(secondary_action_button("清空当前选择")).clicked() {
         app.clear_preview();
     }
 
-    if ui.add(primary_action_button("生成扫描预览")).clicked() {
+    if ui.add(primary_action_button("开始扫描")).clicked() {
         match plan::build_preview() {
             Ok(preview) => app.load_preview(preview),
             Err(error) => {
@@ -2454,14 +2637,14 @@ fn scan_plan_switcher(
 ) {
     card_panel(
         ui,
-        "扫描分区",
-        "逐个分区审查，避免三栏同时滚动带来的干扰。",
+        "步骤 2：审核备份内容",
+        "分别查看个人文件、便携软件和已安装软件记录，避免信息挤在同一屏。",
         |ui| {
             ui.horizontal_wrapped(|ui| {
                 if segment_button(
                     ui,
                     *active_section == ScanPlanSection::UserData,
-                    &format!("用户目录 {}", preview.user_data_roots.len()),
+                    &format!("个人文件 {}", preview.user_data_roots.len()),
                 ) {
                     *active_section = ScanPlanSection::UserData;
                 }
@@ -2491,14 +2674,19 @@ fn restore_section_switcher(
 ) {
     card_panel(
         ui,
-        "恢复分区",
-        "先看软件记录，再选恢复范围，最后执行恢复。",
+        "当前步骤",
+        "先查看备份内容，再选择恢复范围，最后执行恢复。",
         |ui| {
             ui.horizontal_wrapped(|ui| {
                 if segment_button(
                     ui,
                     *active_section == RestoreSection::InstalledApps,
-                    &format!("软件记录 {}", loaded.manifest.installed_apps.len()),
+                    &format!(
+                        "查看内容 {}",
+                        loaded.manifest.selected_user_roots.len()
+                            + loaded.manifest.selected_portable_apps.len()
+                            + loaded.manifest.installed_apps.len()
+                    ),
                 ) {
                     *active_section = RestoreSection::InstalledApps;
                 }
@@ -2530,22 +2718,22 @@ fn segment_button(ui: &mut egui::Ui, selected: bool, label: &str) -> bool {
         egui::Button::new(RichText::new(label).strong().color(if selected {
             Color32::WHITE
         } else {
-            Color32::from_rgb(40, 58, 48)
+            Color32::from_rgb(42, 52, 64)
         }))
         .fill(if selected {
-            Color32::from_rgb(87, 130, 102)
+            Color32::from_rgb(0, 103, 192)
         } else {
-            Color32::from_rgb(240, 245, 241)
+            Color32::from_rgb(244, 247, 251)
         })
         .stroke(egui::Stroke::new(
             1.0,
             if selected {
-                Color32::from_rgb(72, 114, 87)
+                Color32::from_rgb(0, 79, 150)
             } else {
-                Color32::from_rgb(201, 213, 205)
+                Color32::from_rgb(198, 207, 219)
             },
         ))
-        .corner_radius(egui::CornerRadius::same(18))
+        .corner_radius(egui::CornerRadius::same(10))
         .min_size(egui::vec2(108.0, 34.0)),
     )
     .clicked()
@@ -2569,9 +2757,9 @@ fn installed_app_record_card(
 fn overview_jump_button(ui: &mut egui::Ui, title: &str, description: &str) -> bool {
     let mut clicked = false;
     egui::Frame::new()
-        .fill(Color32::from_rgb(246, 249, 246))
-        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(211, 221, 213)))
-        .corner_radius(egui::CornerRadius::same(14))
+        .fill(Color32::from_rgb(248, 250, 253))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(212, 219, 229)))
+        .corner_radius(egui::CornerRadius::same(10))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.label(RichText::new(title).strong());
@@ -2771,12 +2959,12 @@ fn workspace_button(
     let button = egui::Button::new(RichText::new(label).strong().color(if selected {
         Color32::WHITE
     } else {
-        Color32::from_rgb(42, 60, 49)
+        Color32::from_rgb(42, 52, 64)
     }))
     .fill(if selected {
-        Color32::from_rgb(87, 130, 102)
+        Color32::from_rgb(0, 103, 192)
     } else {
-        Color32::from_rgb(239, 244, 239)
+        Color32::from_rgb(244, 247, 251)
     });
 
     if ui.add_enabled(enabled, button).clicked() {
@@ -2786,14 +2974,14 @@ fn workspace_button(
 
 fn flow_chip(ui: &mut egui::Ui, label: &str, active: bool) {
     let fill = if active {
-        Color32::from_rgb(94, 138, 112)
+        Color32::from_rgb(0, 103, 192)
     } else {
-        Color32::from_rgb(238, 244, 239)
+        Color32::from_rgb(239, 244, 250)
     };
     let text = if active {
         Color32::WHITE
     } else {
-        Color32::from_rgb(76, 96, 84)
+        Color32::from_rgb(86, 96, 110)
     };
 
     egui::Frame::new()
@@ -2801,12 +2989,12 @@ fn flow_chip(ui: &mut egui::Ui, label: &str, active: bool) {
         .stroke(egui::Stroke::new(
             1.0,
             if active {
-                Color32::from_rgb(72, 114, 87)
+                Color32::from_rgb(0, 79, 150)
             } else {
-                Color32::from_rgb(205, 216, 208)
+                Color32::from_rgb(208, 216, 226)
             },
         ))
-        .corner_radius(egui::CornerRadius::same(18))
+        .corner_radius(egui::CornerRadius::same(10))
         .inner_margin(egui::Margin::symmetric(10, 6))
         .show(ui, |ui| {
             ui.label(RichText::new(label).strong().color(text));
@@ -2815,14 +3003,14 @@ fn flow_chip(ui: &mut egui::Ui, label: &str, active: bool) {
 
 fn primary_action_button(label: &str) -> egui::Button<'_> {
     egui::Button::new(RichText::new(label).strong().color(Color32::WHITE))
-        .fill(Color32::from_rgb(87, 130, 102))
+        .fill(Color32::from_rgb(0, 103, 192))
         .min_size(egui::vec2(120.0, 34.0))
 }
 
 fn secondary_action_button(label: &str) -> egui::Button<'_> {
-    egui::Button::new(RichText::new(label).color(Color32::from_rgb(43, 60, 49)))
-        .fill(Color32::from_rgb(241, 245, 241))
-        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(196, 210, 201)))
+    egui::Button::new(RichText::new(label).color(Color32::from_rgb(45, 56, 70)))
+        .fill(Color32::from_rgb(245, 248, 252))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(198, 207, 219)))
         .min_size(egui::vec2(108.0, 34.0))
 }
 
@@ -2834,9 +3022,9 @@ fn quick_action_card(
     action: impl FnOnce(),
 ) {
     egui::Frame::new()
-        .fill(Color32::from_rgb(246, 249, 246))
-        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(211, 221, 213)))
-        .corner_radius(egui::CornerRadius::same(16))
+        .fill(Color32::from_rgb(249, 250, 253))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(212, 219, 229)))
+        .corner_radius(egui::CornerRadius::same(10))
         .inner_margin(egui::Margin::same(14))
         .show(ui, |ui| {
             ui.label(RichText::new(title).strong());
@@ -2848,23 +3036,90 @@ fn quick_action_card(
         });
 }
 
+fn wizard_stepper(ui: &mut egui::Ui, steps: &[&str], active_index: usize) {
+    ui.horizontal_wrapped(|ui| {
+        for (index, step) in steps.iter().enumerate() {
+            let active = index == active_index;
+            let complete = index < active_index;
+            let fill = if active {
+                Color32::from_rgb(0, 103, 192)
+            } else if complete {
+                Color32::from_rgb(221, 234, 248)
+            } else {
+                Color32::from_rgb(235, 239, 245)
+            };
+            let text = if active {
+                Color32::WHITE
+            } else {
+                Color32::from_rgb(77, 88, 103)
+            };
+            let stroke = if active {
+                Color32::from_rgb(0, 79, 150)
+            } else {
+                Color32::from_rgb(208, 216, 226)
+            };
+
+            egui::Frame::new()
+                .fill(fill)
+                .stroke(egui::Stroke::new(1.0, stroke))
+                .corner_radius(egui::CornerRadius::same(18))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(*step).strong().color(text));
+                });
+
+            if index + 1 != steps.len() {
+                ui.label(RichText::new(">").color(Color32::from_rgb(135, 145, 158)));
+            }
+        }
+    });
+}
+
+fn review_list_panel(
+    ui: &mut egui::Ui,
+    title: &str,
+    meta: &str,
+    max_height: f32,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Frame::new()
+        .fill(Color32::from_rgb(252, 253, 255))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(214, 220, 230)))
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(title)
+                    .strong()
+                    .color(Color32::from_rgb(39, 47, 58)),
+            );
+            if !meta.is_empty() {
+                ui.small(RichText::new(meta).color(Color32::from_rgb(93, 103, 116)));
+            }
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical()
+                .max_height(max_height)
+                .show(ui, |ui| add_contents(ui));
+        });
+}
+
 fn metric_tile(ui: &mut egui::Ui, fill: Color32, label: &str, value: &str) {
     egui::Frame::new()
         .fill(fill)
-        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(205, 216, 208)))
-        .corner_radius(egui::CornerRadius::same(14))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(211, 218, 228)))
+        .corner_radius(egui::CornerRadius::same(10))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(label)
                     .size(12.0)
-                    .color(Color32::from_rgb(86, 103, 93)),
+                    .color(Color32::from_rgb(96, 105, 118)),
             );
             ui.label(
                 RichText::new(value)
                     .size(18.0)
                     .strong()
-                    .color(Color32::from_rgb(30, 49, 39)),
+                    .color(Color32::from_rgb(33, 42, 55)),
             );
         });
 }
@@ -2873,31 +3128,31 @@ fn status_banner(ui: &mut egui::Ui, fill: Color32, stroke: Color32, text: &str) 
     egui::Frame::new()
         .fill(fill)
         .stroke(egui::Stroke::new(1.0, stroke))
-        .corner_radius(egui::CornerRadius::same(14))
+        .corner_radius(egui::CornerRadius::same(10))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
-            ui.label(RichText::new(text).color(Color32::from_rgb(44, 55, 49)));
+            ui.label(RichText::new(text).color(Color32::from_rgb(45, 55, 68)));
         });
 }
 
 fn principle_row(ui: &mut egui::Ui, text: &str) {
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("•").color(Color32::from_rgb(95, 138, 109)));
+        ui.label(RichText::new("•").color(Color32::from_rgb(0, 94, 177)));
         ui.small(text);
     });
 }
 
 fn compact_empty_state(ui: &mut egui::Ui, title: &str, body: &str) {
     egui::Frame::new()
-        .fill(Color32::from_rgb(247, 249, 246))
-        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(218, 226, 219)))
-        .corner_radius(egui::CornerRadius::same(12))
+        .fill(Color32::from_rgb(247, 249, 252))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(216, 223, 232)))
+        .corner_radius(egui::CornerRadius::same(10))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(title)
                     .strong()
-                    .color(Color32::from_rgb(58, 77, 66)),
+                    .color(Color32::from_rgb(60, 70, 83)),
             );
             ui.small(body);
         });
@@ -2905,17 +3160,17 @@ fn compact_empty_state(ui: &mut egui::Ui, title: &str, body: &str) {
 
 fn section_counter(ui: &mut egui::Ui, label: &str, count: usize) {
     egui::Frame::new()
-        .fill(Color32::from_rgb(241, 246, 242))
-        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(205, 216, 208)))
-        .corner_radius(egui::CornerRadius::same(24))
+        .fill(Color32::from_rgb(243, 247, 252))
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(208, 216, 226)))
+        .corner_radius(egui::CornerRadius::same(18))
         .inner_margin(egui::Margin::symmetric(10, 6))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.small(RichText::new(label).color(Color32::from_rgb(84, 100, 90)));
+                ui.small(RichText::new(label).color(Color32::from_rgb(90, 101, 114)));
                 ui.label(
                     RichText::new(count.to_string())
                         .strong()
-                        .color(Color32::from_rgb(33, 53, 42)),
+                        .color(Color32::from_rgb(34, 44, 56)),
                 );
             });
         });
