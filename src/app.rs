@@ -239,10 +239,8 @@ impl WinRehomeApp {
                 let _ = self.persist_config();
             }
             Err(error) => {
-                self.loaded_archive = None;
-                self.last_verification = None;
-                self.last_restore = None;
                 self.last_error = Some(error.to_string());
+                self.last_notice = None;
             }
         }
     }
@@ -639,13 +637,11 @@ impl eframe::App for WinRehomeApp {
                                             match self.recent_archives.first().cloned() {
                                                 Some(path) => self.load_archive_from_path(path),
                                                 None => {
-                                                    self.loaded_archive = None;
-                                                    self.last_verification = None;
-                                                    self.last_restore = None;
                                                     self.last_error = Some(
                                                         "没有在默认目录、当前备份目录或最近使用目录中找到 .wrh 归档。"
                                                             .to_string(),
                                                     );
+                                                    self.last_notice = None;
                                                 }
                                             }
                                         },
@@ -1070,8 +1066,6 @@ impl eframe::App for WinRehomeApp {
                                                     }
                                                     Err(error) => {
                                                         self.last_archive = None;
-                                                        self.loaded_archive = None;
-                                                        self.last_restore = None;
                                                         self.last_error = Some(
                                                             present_backup_error(
                                                                 &error.to_string(),
@@ -2430,12 +2424,10 @@ fn hero_primary_actions(app: &mut WinRehomeApp, ui: &mut egui::Ui) {
         match app.recent_archives.first().cloned() {
             Some(path) => app.load_archive_from_path(path),
             None => {
-                app.loaded_archive = None;
-                app.last_verification = None;
-                app.last_restore = None;
                 app.last_error = Some(
                     "没有在默认目录、当前备份目录或最近使用目录中找到 .wrh 归档。".to_string(),
                 );
+                app.last_notice = None;
             }
         }
     }
