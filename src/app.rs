@@ -245,23 +245,6 @@ impl WinRehomeApp {
         }
     }
 
-    fn clear_preview(&mut self) {
-        self.preview = None;
-        self.scan_filter.clear();
-        self.selected_user_roots.clear();
-        self.selected_portable_apps.clear();
-        self.active_workspace = if self.loaded_archive.is_some() {
-            WorkspaceView::Restore
-        } else {
-            WorkspaceView::Overview
-        };
-        self.last_archive = None;
-        self.last_verification = None;
-        self.last_restore = None;
-        self.last_notice = None;
-        self.last_error = None;
-    }
-
     fn persist_config(&self) -> anyhow::Result<PathBuf> {
         config::save_config(&config::AppConfig {
             selected_user_roots: self.selected_user_roots.clone(),
@@ -395,173 +378,79 @@ fn load_windows_cjk_font() -> Option<Vec<u8>> {
 
 impl eframe::App for WinRehomeApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("hero_panel")
-            .exact_height(134.0)
+        let has_preview = self.preview.is_some();
+        let has_loaded_archive = self.loaded_archive.is_some();
+        let resolved_workspace =
+            resolved_workspace(self.active_workspace, has_preview, has_loaded_archive);
+        self.active_workspace = resolved_workspace;
+
+        egui::TopBottomPanel::top("app_header")
+            .exact_height(58.0)
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(Color32::from_rgb(233, 239, 247))
+                    .fill(Color32::from_rgb(252, 253, 255))
                     .stroke(egui::Stroke::new(1.0, Color32::from_rgb(197, 208, 222)))
-                    .inner_margin(egui::Margin::symmetric(20, 14))
+                    .inner_margin(egui::Margin::symmetric(18, 10))
                     .show(ui, |ui| {
-                        ui.vertical(|ui| {
-                            hero_identity(
-                                ui,
-                                self.preview.is_some(),
-                                self.last_archive.is_some(),
-                                self.loaded_archive.is_some(),
-                                !self.selected_user_roots.is_empty()
-                                    || !self.selected_portable_apps.is_empty(),
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("WinRehome")
+                                    .size(22.0)
+                                    .strong()
+                                    .color(Color32::from_rgb(32, 39, 49)),
                             );
-                            ui.add_space(8.0);
-                            ui.horizontal_wrapped(|ui| {
-                                hero_primary_actions(self, ui);
-                            });
-                        });
-                    });
-            });
+                            ui.add_space(18.0);
+                            workspace_button(
+                                ui,
+                                &mut self.active_workspace,
+                                WorkspaceView::Overview,
+                                "首页",
+                                true,
+                            );
+                            workspace_button(
+                                ui,
+                                &mut self.active_workspace,
+                                WorkspaceView::ScanPlan,
+                                "创建备份",
+                                has_preview,
+                            );
+                            workspace_button(
+                                ui,
+                                &mut self.active_workspace,
+                                WorkspaceView::Restore,
+                                "恢复备份",
+                                has_loaded_archive,
+                            );
 
-        egui::SidePanel::left("overview_panel")
-            .resizable(false)
-            .exact_width(220.0)
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        card_panel(
-                            ui,
-                            "当前阶段",
-                            "先扫描或加载归档，再进入对应的向导流程。",
-                            |ui| {
-                                ui.label(format!(
-                                    "当前工作：{}",
-                                    current_stage_label(
-                                        self.preview.is_some(),
-                                        self.loaded_archive.is_some()
-                                    )
-                                ));
-                                if let Some(preview) = &self.preview {
-                                    metric_tile(
-                                        ui,
-                                        Color32::from_rgb(231, 240, 233),
-                                        "已发现候选",
-                                        &format!(
-                                            "{} 目录 / {} 便携 / {} 软件",
-                                            preview.user_data_roots.len(),
-                                            preview.portable_candidates.len(),
-                                            preview.installed_apps.len()
-                                        ),
-                                    );
-                                } else if let Some(loaded) = &self.loaded_archive {
-                                    metric_tile(
-                                        ui,
-                                        Color32::from_rgb(233, 238, 245),
-                                        "已加载归档",
-                                        &format!(
-                                            "{} 个文件 / {}",
-                                            loaded.manifest.files.len(),
-                                            format_bytes(loaded.manifest.stored_bytes)
-                                        ),
-                                    );
-                                } else {
-                                    ui.small("还没有扫描结果，也没有已加载的归档。");
-                                }
-                            },
-                        );
-
-                        if let Some(error) = &self.last_error {
-                            status_banner(
-                                ui,
-                                Color32::from_rgb(252, 233, 229),
-                                Color32::from_rgb(212, 122, 102),
-                                &format!("操作失败：{error}"),
-                            );
-                        }
-                        if let Some(notice) = &self.last_notice {
-                            status_banner(
-                                ui,
-                                Color32::from_rgb(232, 239, 248),
-                                Color32::from_rgb(108, 143, 184),
-                                notice,
-                            );
-                        }
-                        if let Some(result) = &self.last_archive {
-                            status_banner(
-                                ui,
-                                Color32::from_rgb(230, 242, 233),
-                                Color32::from_rgb(102, 150, 113),
-                                &format!(
-                                    "归档已创建并完成校验：{}\n{} 个文件，原始大小 {}，归档大小 {}。",
-                                    result.archive_path.display(),
-                                    result.file_count,
-                                    format_bytes(result.original_bytes),
-                                    format_bytes(result.stored_bytes)
-                                ),
-                            );
-                        }
-                        if let Some(result) = &self.last_restore {
-                            status_banner(
-                                ui,
-                                Color32::from_rgb(232, 239, 248),
-                                Color32::from_rgb(97, 128, 177),
-                                &format!(
-                                    "归档已恢复：{} -> {}\n{} 个文件，{}，跳过 {} 个已存在文件。",
-                                    result.archive_path.display(),
-                                    result.destination_root.display(),
-                                    result.restored_files,
-                                    format_bytes(result.restored_bytes),
-                                    result.skipped_existing_files
-                                ),
-                            );
-                        }
-                        if let Some(result) = &self.last_verification {
-                            status_banner(
-                                ui,
-                                Color32::from_rgb(241, 235, 250),
-                                Color32::from_rgb(133, 104, 188),
-                                &format!(
-                                    "归档校验完成：{}\n{} 个文件，{}。",
-                                    result.archive_path.display(),
-                                    result.verified_files,
-                                    format_bytes(result.verified_bytes)
-                                ),
-                            );
-                        }
-
-                        card_panel(
-                            ui,
-                            "可靠性原则",
-                            "数据安全优先于压缩率和扫描激进度。",
-                            |ui| {
-                                principle_row(ui, "已安装软件只记录，不打包程序本体");
-                                principle_row(ui, "便携软件先审查，再进入归档");
-                                principle_row(ui, "个人文件按白名单和迁移价值选择");
-                                principle_row(ui, "缓存、临时文件、日志默认排除");
-                            },
-                        );
-
-                        if !self.recent_archives.is_empty() {
-                            card_panel(
-                                ui,
-                                "最近归档",
-                                "方便快速重新打开和验证。",
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    for path in self.recent_archives.clone().into_iter().take(5) {
-                                        let file_name = archive_file_label(&path);
-                                        let archive_meta = recent_archive_meta(&path);
-                                        result_card(ui, &file_name, &archive_meta, |ui| {
-                                            ui.small(path.display().to_string());
-                                            if ui
-                                                .add(secondary_action_button("加载这个归档"))
-                                                .clicked()
-                                            {
-                                                self.load_archive_from_path(path.clone());
+                                    if ui.add(primary_action_button("开始扫描")).clicked() {
+                                        match plan::build_preview() {
+                                            Ok(preview) => self.load_preview(preview),
+                                            Err(error) => {
+                                                self.last_archive = None;
+                                                self.last_error = Some(error.to_string());
+                                                self.last_notice = None;
                                             }
-                                        });
-                                        ui.add_space(6.0);
+                                        }
+                                    }
+                                    if ui.add(secondary_action_button("加载最新归档")).clicked() {
+                                        self.refresh_recent_archives();
+                                        match self.recent_archives.first().cloned() {
+                                            Some(path) => self.load_archive_from_path(path),
+                                            None => {
+                                                self.last_error = Some(
+                                                    "没有在默认目录、当前备份目录或最近使用目录中找到 .wrh 归档。"
+                                                        .to_string(),
+                                                );
+                                                self.last_notice = None;
+                                            }
+                                        }
                                     }
                                 },
                             );
-                        }
+                        });
                     });
             });
 
@@ -569,20 +458,15 @@ impl eframe::App for WinRehomeApp {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    let resolved_workspace = resolved_workspace(
-                        self.active_workspace,
-                        self.preview.is_some(),
-                        self.loaded_archive.is_some(),
-                    );
-                    workspace_switcher(
-                        ui,
-                        &mut self.active_workspace,
-                        self.preview.is_some(),
-                        self.loaded_archive.is_some(),
-                    );
-                    ui.add_space(10.0);
+                    centered_content(ui, 1120.0, |ui| {
+                        show_feedback_banners(ui, self);
+                        ui.add_space(12.0);
 
-                    if matches!(resolved_workspace, WorkspaceView::Overview) {
+                        if matches!(resolved_workspace, WorkspaceView::Overview) {
+                            ui.add_space(24.0);
+                        }
+
+                        if matches!(resolved_workspace, WorkspaceView::Overview) {
                         card_panel(
                             ui,
                             "欢迎使用 WinRehome",
@@ -802,7 +686,7 @@ impl eframe::App for WinRehomeApp {
                         );
                     }
 
-                    if matches!(resolved_workspace, WorkspaceView::ScanPlan) {
+                        if matches!(resolved_workspace, WorkspaceView::ScanPlan) {
                         if let Some(preview) = self.preview.clone() {
                             let visible_portable_keys: Vec<String> = preview
                                 .portable_candidates
@@ -1543,7 +1427,7 @@ impl eframe::App for WinRehomeApp {
                         }
                     }
 
-                    if matches!(resolved_workspace, WorkspaceView::Restore) {
+                        if matches!(resolved_workspace, WorkspaceView::Restore) {
                         if let Some(loaded) = self.loaded_archive.clone() {
                             let visible_restore_user_keys: Vec<String> = loaded
                                 .manifest
@@ -2536,6 +2420,7 @@ impl eframe::App for WinRehomeApp {
                             );
                         }
                     }
+                    });
                 });
         });
     }
@@ -2565,69 +2450,6 @@ fn card_panel(
             }
             add_contents(ui);
         });
-}
-
-fn hero_identity(
-    ui: &mut egui::Ui,
-    has_preview: bool,
-    has_archive: bool,
-    has_loaded_archive: bool,
-    has_review_selection: bool,
-) {
-    ui.label(
-        RichText::new("WinRehome")
-            .size(26.0)
-            .strong()
-            .color(Color32::from_rgb(32, 39, 49)),
-    );
-    ui.label(
-        RichText::new("一个尽量节省空间的 Windows 迁移备份工具，只保留真正值得迁移的数据。")
-            .color(Color32::from_rgb(89, 97, 111)),
-    );
-    ui.add_space(8.0);
-    ui.horizontal_wrapped(|ui| {
-        flow_chip(ui, "扫描", has_preview);
-        flow_chip(ui, "审查", has_preview && has_review_selection);
-        flow_chip(ui, "归档", has_archive);
-        flow_chip(ui, "恢复", has_loaded_archive);
-    });
-    ui.small(format!(
-        "当前阶段：{}",
-        current_stage_label(has_preview, has_loaded_archive)
-    ));
-}
-
-fn hero_primary_actions(app: &mut WinRehomeApp, ui: &mut egui::Ui) {
-    if ui.add(secondary_action_button("加载最新归档")).clicked() {
-        app.refresh_recent_archives();
-        match app.recent_archives.first().cloned() {
-            Some(path) => app.load_archive_from_path(path),
-            None => {
-                app.last_error = Some(
-                    "没有在默认目录、当前备份目录或最近使用目录中找到 .wrh 归档。".to_string(),
-                );
-                app.last_notice = None;
-            }
-        }
-    }
-
-    if ui.add(secondary_action_button("回到总览")).clicked() {
-        app.active_workspace = WorkspaceView::Overview;
-    }
-
-    if ui.add(secondary_action_button("清空当前选择")).clicked() {
-        app.clear_preview();
-    }
-
-    if ui.add(primary_action_button("开始扫描")).clicked() {
-        match plan::build_preview() {
-            Ok(preview) => app.load_preview(preview),
-            Err(error) => {
-                app.last_archive = None;
-                app.last_error = Some(error.to_string());
-            }
-        }
-    }
 }
 
 fn scan_plan_switcher(
@@ -2916,36 +2738,126 @@ fn dedupe_dirs(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
     deduped
 }
 
-fn workspace_switcher(
-    ui: &mut egui::Ui,
-    active_workspace: &mut WorkspaceView,
-    has_preview: bool,
-    has_loaded_archive: bool,
-) {
+fn centered_content(ui: &mut egui::Ui, max_width: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
+    let available_width = ui.available_width();
+    let target_width = available_width.min(max_width);
+    let side_space = ((available_width - target_width) / 2.0).max(0.0);
+
+    ui.horizontal(|ui| {
+        if side_space > 0.0 {
+            ui.add_space(side_space);
+        }
+        ui.scope(|ui| {
+            ui.set_min_width(target_width);
+            ui.set_max_width(target_width);
+            add_contents(ui);
+        });
+    });
+}
+
+fn show_feedback_banners(ui: &mut egui::Ui, app: &WinRehomeApp) {
     card_panel(
         ui,
-        "工作区",
-        "把扫描计划和归档恢复分开，避免所有信息挤在同一屏。",
+        "当前阶段",
+        "先扫描或加载归档，再进入对应的向导流程。",
         |ui| {
-            ui.horizontal_wrapped(|ui| {
-                workspace_button(ui, active_workspace, WorkspaceView::Overview, "总览", true);
-                workspace_button(
+            ui.label(format!(
+                "当前工作：{}",
+                current_stage_label(app.preview.is_some(), app.loaded_archive.is_some())
+            ));
+            if let Some(preview) = &app.preview {
+                metric_tile(
                     ui,
-                    active_workspace,
-                    WorkspaceView::ScanPlan,
-                    "扫描计划",
-                    has_preview,
+                    Color32::from_rgb(245, 248, 252),
+                    "已发现候选",
+                    &format!(
+                        "{} 目录 / {} 便携 / {} 软件",
+                        preview.user_data_roots.len(),
+                        preview.portable_candidates.len(),
+                        preview.installed_apps.len()
+                    ),
                 );
-                workspace_button(
+            } else if let Some(loaded) = &app.loaded_archive {
+                metric_tile(
                     ui,
-                    active_workspace,
-                    WorkspaceView::Restore,
-                    "归档恢复",
-                    has_loaded_archive,
+                    Color32::from_rgb(245, 248, 252),
+                    "已加载归档",
+                    &format!(
+                        "{} 个文件 / {}",
+                        loaded.manifest.files.len(),
+                        format_bytes(loaded.manifest.stored_bytes)
+                    ),
                 );
-            });
+            } else {
+                ui.small("还没有扫描结果，也没有已加载的归档。");
+            }
         },
     );
+    ui.add_space(10.0);
+
+    if let Some(error) = &app.last_error {
+        status_banner(
+            ui,
+            Color32::from_rgb(252, 233, 229),
+            Color32::from_rgb(212, 122, 102),
+            &format!("操作失败：{error}"),
+        );
+        ui.add_space(8.0);
+    }
+    if let Some(notice) = &app.last_notice {
+        status_banner(
+            ui,
+            Color32::from_rgb(232, 239, 248),
+            Color32::from_rgb(108, 143, 184),
+            notice,
+        );
+        ui.add_space(8.0);
+    }
+    if let Some(result) = &app.last_archive {
+        status_banner(
+            ui,
+            Color32::from_rgb(230, 242, 233),
+            Color32::from_rgb(102, 150, 113),
+            &format!(
+                "归档已创建并完成校验：{}\n{} 个文件，原始大小 {}，归档大小 {}。",
+                result.archive_path.display(),
+                result.file_count,
+                format_bytes(result.original_bytes),
+                format_bytes(result.stored_bytes)
+            ),
+        );
+        ui.add_space(8.0);
+    }
+    if let Some(result) = &app.last_restore {
+        status_banner(
+            ui,
+            Color32::from_rgb(232, 239, 248),
+            Color32::from_rgb(97, 128, 177),
+            &format!(
+                "归档已恢复：{} -> {}\n{} 个文件，{}，跳过 {} 个已存在文件。",
+                result.archive_path.display(),
+                result.destination_root.display(),
+                result.restored_files,
+                format_bytes(result.restored_bytes),
+                result.skipped_existing_files
+            ),
+        );
+        ui.add_space(8.0);
+    }
+    if let Some(result) = &app.last_verification {
+        status_banner(
+            ui,
+            Color32::from_rgb(241, 235, 250),
+            Color32::from_rgb(133, 104, 188),
+            &format!(
+                "归档校验完成：{}\n{} 个文件，{}。",
+                result.archive_path.display(),
+                result.verified_files,
+                format_bytes(result.verified_bytes)
+            ),
+        );
+        ui.add_space(8.0);
+    }
 }
 
 fn workspace_button(
@@ -2970,35 +2882,6 @@ fn workspace_button(
     if ui.add_enabled(enabled, button).clicked() {
         *active_workspace = target;
     }
-}
-
-fn flow_chip(ui: &mut egui::Ui, label: &str, active: bool) {
-    let fill = if active {
-        Color32::from_rgb(0, 103, 192)
-    } else {
-        Color32::from_rgb(239, 244, 250)
-    };
-    let text = if active {
-        Color32::WHITE
-    } else {
-        Color32::from_rgb(86, 96, 110)
-    };
-
-    egui::Frame::new()
-        .fill(fill)
-        .stroke(egui::Stroke::new(
-            1.0,
-            if active {
-                Color32::from_rgb(0, 79, 150)
-            } else {
-                Color32::from_rgb(208, 216, 226)
-            },
-        ))
-        .corner_radius(egui::CornerRadius::same(10))
-        .inner_margin(egui::Margin::symmetric(10, 6))
-        .show(ui, |ui| {
-            ui.label(RichText::new(label).strong().color(text));
-        });
 }
 
 fn primary_action_button(label: &str) -> egui::Button<'_> {
