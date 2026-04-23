@@ -3,6 +3,7 @@ use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, RichTex
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Debug, Clone)]
 struct LoadedArchive {
@@ -862,6 +863,18 @@ impl eframe::App for WinRehomeApp {
                                                 let _ = self.persist_config();
                                             }
                                         }
+                                        if ui.add(secondary_action_button("打开目录")).clicked() {
+                                            let path = PathBuf::from(self.backup_output_input.trim());
+                                            if self.backup_output_input.trim().is_empty() {
+                                                self.last_error = Some(
+                                                    "请先填写或选择备份输出目录。".to_string(),
+                                                );
+                                                self.last_notice = None;
+                                            } else if let Err(error) = open_path_in_explorer(&path) {
+                                                self.last_error = Some(error.to_string());
+                                                self.last_notice = None;
+                                            }
+                                        }
                                     });
 
                                     if !self.backup_output_input.trim().is_empty() {
@@ -1511,6 +1524,18 @@ impl eframe::App for WinRehomeApp {
                                                 PathBuf::from(self.archive_path_input.trim());
                                             self.load_archive_from_path(path);
                                         }
+                                        if ui.add(secondary_action_button("定位归档")).clicked() {
+                                            let path = PathBuf::from(self.archive_path_input.trim());
+                                            if self.archive_path_input.trim().is_empty() {
+                                                self.last_error =
+                                                    Some("请先选择一个归档文件。".to_string());
+                                                self.last_notice = None;
+                                            } else if let Err(error) = open_path_in_explorer(&path)
+                                            {
+                                                self.last_error = Some(error.to_string());
+                                                self.last_notice = None;
+                                            }
+                                        }
                                     });
 
                                     let archive_name = loaded
@@ -1973,6 +1998,25 @@ impl eframe::App for WinRehomeApp {
                                                         let _ = self.persist_config();
                                                     }
                                                 }
+                                                if ui.add(secondary_action_button("打开目录")).clicked()
+                                                {
+                                                    let path = PathBuf::from(
+                                                        self.restore_destination_input.trim(),
+                                                    );
+                                                    if self.restore_destination_input.trim().is_empty()
+                                                    {
+                                                        self.last_error = Some(
+                                                            "请先填写或选择恢复目标目录。"
+                                                                .to_string(),
+                                                        );
+                                                        self.last_notice = None;
+                                                    } else if let Err(error) =
+                                                        open_path_in_explorer(&path)
+                                                    {
+                                                        self.last_error = Some(error.to_string());
+                                                        self.last_notice = None;
+                                                    }
+                                                }
                                             });
 
                                             if ui
@@ -2356,6 +2400,23 @@ fn recent_archive_meta(path: &Path) -> String {
         Ok(metadata) => format!("{} | .wrh 归档", format_bytes(metadata.len())),
         Err(_) => ".wrh 归档".to_string(),
     }
+}
+
+fn open_path_in_explorer(target: &Path) -> anyhow::Result<()> {
+    let mut command = Command::new("explorer");
+    if target.is_file() {
+        command.arg(format!("/select,{}", target.display()));
+    } else {
+        command.arg(target);
+    }
+
+    command.spawn().map(|_| ()).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to open Explorer for {}: {}",
+            target.display(),
+            error
+        )
+    })
 }
 
 fn pick_inventory_export_path(default_name: &str, directory_hint: Option<&str>) -> Option<PathBuf> {
