@@ -123,6 +123,6 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 ### Repository Release Conventions
 
 - GitHub release packaging is handled by `.github/workflows/cd.yaml`.
-- The release workflow is triggered by the `Release published` event.
+- The release workflow is triggered by the GitHub Release `prereleased` and `published` events so both beta releases and stable releases upload Windows assets automatically.
 - Release assets should include a Windows executable named like `WinRehome-vX.Y.Z-windows-x64.exe`.
 - If release packaging changes, update both the workflow and this file in the same task.
