@@ -19,6 +19,13 @@ struct InstalledAppExportRow {
     uninstall_key: String,
 }
 
+#[derive(Debug, Clone)]
+struct BackupOutputPreflight {
+    output_dir: PathBuf,
+    exists: bool,
+    is_directory: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RestorePreviewSummary {
     selected_root_count: usize,
@@ -861,6 +868,8 @@ impl eframe::App for WinRehomeApp {
                                 &self.selected_user_roots,
                                 &self.selected_portable_apps,
                             );
+                            let backup_preflight =
+                                preview_backup_output_directory(&self.backup_output_input);
 
                             card_panel(
                                 ui,
@@ -959,6 +968,43 @@ impl eframe::App for WinRehomeApp {
                                     }
 
                                     ui.add_space(8.0);
+                                    if summary.total_files == 0 {
+                                        compact_empty_state(
+                                            ui,
+                                            "还没有备份内容",
+                                            "先选择至少一个用户目录或便携软件，才能创建备份归档。",
+                                        );
+                                    } else {
+                                        match &backup_preflight {
+                                            Ok(preflight) => {
+                                                status_banner(
+                                                    ui,
+                                                    Color32::from_rgb(232, 239, 248),
+                                                    Color32::from_rgb(130, 155, 186),
+                                                    &format!(
+                                                        "预检：将把 {} 个文件写入 {}。目标目录{}。",
+                                                        summary.total_files,
+                                                        preflight.output_dir.display(),
+                                                        if preflight.exists && preflight.is_directory {
+                                                            "已存在"
+                                                        } else {
+                                                            "将由 WinRehome 自动创建"
+                                                        }
+                                                    ),
+                                                );
+                                            }
+                                            Err(error) => {
+                                                status_banner(
+                                                    ui,
+                                                    Color32::from_rgb(252, 233, 229),
+                                                    Color32::from_rgb(212, 122, 102),
+                                                    &present_backup_error(&error.to_string()),
+                                                );
+                                            }
+                                        }
+                                    }
+
+                                    ui.add_space(8.0);
                                     ui.horizontal_wrapped(|ui| {
                                         if ui.add(secondary_action_button("使用推荐选择")).clicked()
                                         {
@@ -977,32 +1023,22 @@ impl eframe::App for WinRehomeApp {
 
                                         if ui
                                             .add_enabled(
-                                                summary.total_files > 0,
+                                                summary.total_files > 0
+                                                    && backup_preflight.is_ok(),
                                                 primary_action_button("创建备份归档"),
                                             )
                                             .clicked()
                                         {
-                                            let output_dir = if self
-                                                .backup_output_input
-                                                .trim()
-                                                .is_empty()
-                                            {
-                                                archive::default_output_dir().map(|path| {
+                                            if let Ok(preflight) = &backup_preflight {
+                                                let path = preflight.output_dir.clone();
+                                                if self.backup_output_input.trim().is_empty() {
                                                     self.backup_output_input =
                                                         path.display().to_string();
                                                     let _ = self.persist_config();
-                                                    path
-                                                })
-                                            } else {
-                                                Ok(PathBuf::from(
-                                                    self.backup_output_input.trim(),
-                                                ))
-                                            };
-
-                                            match output_dir.and_then(|path| {
+                                                }
                                                 let default_output_dir =
                                                     archive::default_output_dir().ok();
-                                                if default_output_dir
+                                                let backup_result = if default_output_dir
                                                     .as_ref()
                                                     .is_some_and(|default_dir| default_dir == &path)
                                                 {
@@ -1018,23 +1054,31 @@ impl eframe::App for WinRehomeApp {
                                                         &self.selected_portable_apps,
                                                         &path,
                                                     )
-                                                }
-                                            }) {
-                                                Ok(result) => {
-                                                    self.load_archive_from_path(
-                                                        result.archive_path.clone(),
-                                                    );
-                                                    self.last_archive = Some(result);
-                                                    self.last_verification = None;
-                                                    self.last_restore = None;
-                                                    self.last_error = None;
-                                                    let _ = self.persist_config();
-                                                }
-                                                Err(error) => {
-                                                    self.last_archive = None;
-                                                    self.loaded_archive = None;
-                                                    self.last_restore = None;
-                                                    self.last_error = Some(error.to_string());
+                                                };
+
+                                                match backup_result {
+                                                    Ok(result) => {
+                                                        self.load_archive_from_path(
+                                                            result.archive_path.clone(),
+                                                        );
+                                                        self.last_archive = Some(result);
+                                                        self.last_verification = None;
+                                                        self.last_restore = None;
+                                                        self.last_notice = None;
+                                                        self.last_error = None;
+                                                        let _ = self.persist_config();
+                                                    }
+                                                    Err(error) => {
+                                                        self.last_archive = None;
+                                                        self.loaded_archive = None;
+                                                        self.last_restore = None;
+                                                        self.last_error = Some(
+                                                            present_backup_error(
+                                                                &error.to_string(),
+                                                            ),
+                                                        );
+                                                        self.last_notice = None;
+                                                    }
                                                 }
                                             }
                                         }
@@ -2970,6 +3014,44 @@ fn present_restore_error(message: &str) -> String {
     }
 }
 
+fn present_backup_error(message: &str) -> String {
+    if message.contains("backup output path is an existing file:") {
+        "备份输出路径无效：你选中了一个文件，不是目录。请改成文件夹路径。".to_string()
+    } else if message.contains("No files are selected for backup.") {
+        "当前没有可打包的内容。请先选择至少一个用户目录或便携软件。".to_string()
+    } else if message.contains("failed to create backup output directory") {
+        "无法创建备份目录。请检查目标路径是否可写。".to_string()
+    } else if message.contains("failed to create") {
+        "无法写入备份归档。请检查目标目录是否可写，或确认同名文件没有被占用。".to_string()
+    } else {
+        message.to_string()
+    }
+}
+
+fn preview_backup_output_directory(
+    backup_output_input: &str,
+) -> anyhow::Result<BackupOutputPreflight> {
+    let output_dir = if backup_output_input.trim().is_empty() {
+        archive::default_output_dir()?
+    } else {
+        PathBuf::from(backup_output_input.trim())
+    };
+
+    let metadata = fs::metadata(&output_dir).ok();
+    if metadata.as_ref().is_some_and(|metadata| !metadata.is_dir()) {
+        anyhow::bail!(
+            "backup output path is an existing file: {}",
+            output_dir.display()
+        );
+    }
+
+    Ok(BackupOutputPreflight {
+        output_dir,
+        exists: metadata.is_some(),
+        is_directory: metadata.as_ref().is_some_and(|metadata| metadata.is_dir()),
+    })
+}
+
 fn resolved_workspace(
     requested: WorkspaceView,
     has_preview: bool,
@@ -3189,10 +3271,10 @@ mod tests {
     use super::{
         InstalledAppExportRow, LoadedArchive, build_restore_preview_summary,
         effective_restore_roots, escape_csv_field, export_installed_app_inventory_csv,
-        portable_candidate_kind, portable_restore_root_key, restore_destination_for_loaded_archive,
-        restore_flags_for_loaded_archive, restore_roots_for_loaded_archive,
-        restore_section_for_loaded_archive, restore_text_filter_for_loaded_archive,
-        user_restore_root_key,
+        portable_candidate_kind, portable_restore_root_key, preview_backup_output_directory,
+        restore_destination_for_loaded_archive, restore_flags_for_loaded_archive,
+        restore_roots_for_loaded_archive, restore_section_for_loaded_archive,
+        restore_text_filter_for_loaded_archive, user_restore_root_key,
     };
     use crate::archive::{ArchiveManifest, ArchivedFileEntry, ManifestPortableApp, ManifestRoot};
     use std::collections::HashSet;
@@ -3395,5 +3477,38 @@ mod tests {
         assert_eq!(flags, (true, true, false));
         assert_eq!(section, super::RestoreSection::RestoreScope);
         assert!(filter.is_empty());
+    }
+
+    #[test]
+    fn backup_preflight_accepts_missing_directory() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("winrehome-missing-output-dir-{unique}"));
+
+        let preview = preview_backup_output_directory(&path.display().to_string())
+            .expect("missing output dir should be acceptable");
+
+        assert_eq!(preview.output_dir, path);
+        assert!(!preview.exists);
+        assert!(!preview.is_directory);
+    }
+
+    #[test]
+    fn backup_preflight_rejects_existing_file_path() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("winrehome-output-file-{unique}.txt"));
+        fs::write(&path, b"file-not-dir").expect("write output file");
+
+        let error = preview_backup_output_directory(&path.display().to_string())
+            .expect_err("file output path should be rejected");
+
+        assert!(error.to_string().contains("existing file"));
+
+        let _ = fs::remove_file(path);
     }
 }
