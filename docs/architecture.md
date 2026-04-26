@@ -17,7 +17,8 @@ Build a Windows migration backup tool that minimizes backup size without losing 
 
 - Installed software inventory from registry uninstall keys
 - CSV export for the currently filtered installed-software inventory from both scan and restore views
-- High-value user data roots with default recommendations
+- High-value user data roots with default recommendations, including common browser/editor/developer settings
+- User-added custom include paths for extra folders or single-file configs that the default recommendations miss
 - Portable application candidate discovery from curated search roots, including single executable candidates
 - Desktop preview UI with reviewable backup-plan estimates
 - Backup preflight feedback for output-directory validity before archive creation

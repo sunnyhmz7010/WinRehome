@@ -66,6 +66,7 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - Installed applications are recorded as inventory, not backed up as installed binaries.
 - Portable applications are detected as candidates, reviewed, and packed into the main archive.
 - User files are included by allow-list and migration heuristics, not broad directory exclusion alone.
+- Users may add explicit extra file or directory paths when default migration recommendations miss important data.
 
 ### Important Files
 
@@ -103,6 +104,7 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - Installed software detection should prefer registry uninstall metadata and other verifiable Windows sources.
 - Portable-app detection must stay explainable. Favor confidence scoring and user review over opaque “smart” guesses.
 - Default exclusions must cover cache, temp, logs, and build artifacts unless there is a documented restore value.
+- User-added custom include paths should remain explicit, reviewable, and path-based; do not silently broaden them into heuristic whole-app captures.
 - When classification behavior changes, update both the implementation and `docs/architecture.md`.
 
 ### Restore Safety Rules

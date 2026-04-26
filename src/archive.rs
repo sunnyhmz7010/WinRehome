@@ -41,19 +41,36 @@ pub struct VerificationResult {
     pub verified_bytes: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct BackupOutputPreflight {
+    pub output_dir: PathBuf,
+    pub exists: bool,
+    pub is_directory: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RestorePreflight {
     pub selected_files: usize,
+    pub new_files: usize,
     pub conflicting_files: usize,
+    pub new_examples: Vec<String>,
     pub conflict_examples: Vec<String>,
     pub destination_exists: bool,
     pub destination_is_directory: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RestoreProgress {
+    pub processed_files: usize,
+    pub total_files: usize,
+    pub current_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreSelection {
     pub restore_user_data: bool,
     pub restore_portable_apps: bool,
+    pub restore_installed_app_dirs: bool,
     pub selected_roots: HashSet<String>,
     pub skip_existing_files: bool,
 }
@@ -63,6 +80,7 @@ impl Default for RestoreSelection {
         Self {
             restore_user_data: true,
             restore_portable_apps: true,
+            restore_installed_app_dirs: true,
             selected_roots: HashSet::new(),
             skip_existing_files: false,
         }
@@ -88,6 +106,10 @@ pub struct ManifestInstalledApp {
     pub display_name: String,
     pub source: String,
     pub install_location: Option<String>,
+    #[serde(default)]
+    pub backup_root: Option<String>,
+    #[serde(default)]
+    pub files_included: bool,
     pub uninstall_key: String,
 }
 
@@ -180,12 +202,14 @@ pub fn create_backup_archive(
     preview: &crate::plan::BackupPreview,
     selected_user_roots: &HashSet<String>,
     selected_portable_apps: &HashSet<String>,
+    selected_installed_app_dirs: &HashSet<String>,
 ) -> anyhow::Result<BackupResult> {
     let output_dir = default_output_dir()?;
     create_backup_archive_in_dir(
         preview,
         selected_user_roots,
         selected_portable_apps,
+        selected_installed_app_dirs,
         &output_dir,
     )
 }
@@ -194,14 +218,59 @@ pub fn create_backup_archive_in_dir(
     preview: &crate::plan::BackupPreview,
     selected_user_roots: &HashSet<String>,
     selected_portable_apps: &HashSet<String>,
+    selected_installed_app_dirs: &HashSet<String>,
     output_dir: &Path,
 ) -> anyhow::Result<BackupResult> {
     create_backup_archive_at(
         preview,
         selected_user_roots,
         selected_portable_apps,
+        selected_installed_app_dirs,
         output_dir,
     )
+}
+
+pub fn preview_backup_output(
+    preview: &crate::plan::BackupPreview,
+    selected_user_roots: &HashSet<String>,
+    selected_portable_apps: &HashSet<String>,
+    selected_installed_app_dirs: &HashSet<String>,
+    output_dir: &Path,
+) -> anyhow::Result<BackupOutputPreflight> {
+    let metadata = fs::metadata(output_dir).ok();
+    if metadata.as_ref().is_some_and(|metadata| !metadata.is_dir()) {
+        bail!(
+            "backup output path is an existing file: {}",
+            output_dir.display()
+        );
+    }
+
+    if let Some(blocker) = find_existing_file_in_ancestors(output_dir) {
+        bail!(
+            "backup output path is blocked by existing file: {}",
+            blocker.display()
+        );
+    }
+
+    for source_dir in collect_selected_backup_source_dirs(
+        preview,
+        selected_user_roots,
+        selected_portable_apps,
+        selected_installed_app_dirs,
+    ) {
+        if output_dir == source_dir || output_dir.starts_with(&source_dir) {
+            bail!(
+                "backup output path overlaps selected source directory: {}",
+                source_dir.display()
+            );
+        }
+    }
+
+    Ok(BackupOutputPreflight {
+        output_dir: output_dir.to_path_buf(),
+        exists: metadata.is_some(),
+        is_directory: metadata.as_ref().is_some_and(|metadata| metadata.is_dir()),
+    })
 }
 
 pub fn list_recent_archives_from_dirs(
@@ -278,12 +347,13 @@ pub fn default_restore_dir(archive_path: &Path) -> anyhow::Result<PathBuf> {
     Ok(restore_root.join(sanitize_segment(archive_name)))
 }
 
+#[cfg(test)]
 pub fn restore_archive(
     archive_path: &Path,
     destination_root: &Path,
 ) -> anyhow::Result<RestoreResult> {
     let manifest = read_archive_manifest(archive_path)?;
-    restore_archive_with_manifest(
+    restore_archive_with_manifest_and_progress(
         archive_path,
         destination_root,
         &manifest,
@@ -291,16 +361,36 @@ pub fn restore_archive(
             selected_roots: collect_manifest_restore_roots(&manifest),
             ..RestoreSelection::default()
         },
+        |_| {},
     )
 }
 
+#[cfg(test)]
 pub fn restore_archive_with_selection(
     archive_path: &Path,
     destination_root: &Path,
     selection: RestoreSelection,
 ) -> anyhow::Result<RestoreResult> {
+    restore_archive_with_selection_and_progress(archive_path, destination_root, selection, |_| {})
+}
+
+pub fn restore_archive_with_selection_and_progress<F>(
+    archive_path: &Path,
+    destination_root: &Path,
+    selection: RestoreSelection,
+    on_progress: F,
+) -> anyhow::Result<RestoreResult>
+where
+    F: FnMut(RestoreProgress),
+{
     let manifest = read_archive_manifest(archive_path)?;
-    restore_archive_with_manifest(archive_path, destination_root, &manifest, selection)
+    restore_archive_with_manifest_and_progress(
+        archive_path,
+        destination_root,
+        &manifest,
+        selection,
+        on_progress,
+    )
 }
 
 pub fn preview_restore_with_manifest(
@@ -308,29 +398,7 @@ pub fn preview_restore_with_manifest(
     manifest: &ArchiveManifest,
     selection: &RestoreSelection,
 ) -> anyhow::Result<RestorePreflight> {
-    let selected_files: Vec<&ArchivedFileEntry> = manifest
-        .files
-        .iter()
-        .filter(|entry| {
-            let category_allowed = match entry.entry_kind.as_str() {
-                "user_data" => selection.restore_user_data,
-                "portable_app" => selection.restore_portable_apps,
-                _ => false,
-            };
-
-            if !category_allowed {
-                return false;
-            }
-
-            if selection.selected_roots.is_empty() {
-                return false;
-            }
-
-            selection.selected_roots.iter().any(|root| {
-                entry.archive_path == *root || entry.archive_path.starts_with(&format!("{root}/"))
-            })
-        })
-        .collect();
+    let selected_files = collect_selected_restore_entries(manifest, selection);
 
     if selected_files.is_empty() {
         bail!("Archive does not contain any files to restore.");
@@ -346,6 +414,8 @@ pub fn preview_restore_with_manifest(
             destination_root.display()
         );
     }
+
+    validate_restore_targets(destination_root, &selected_files)?;
 
     let mut preview = RestorePreflight {
         selected_files: selected_files.len(),
@@ -366,45 +436,34 @@ pub fn preview_restore_with_manifest(
                     .conflict_examples
                     .push(output_path.display().to_string());
             }
+        } else {
+            preview.new_files += 1;
+            if preview.new_examples.len() < 3 {
+                preview.new_examples.push(output_path.display().to_string());
+            }
         }
     }
 
     Ok(preview)
 }
 
-fn restore_archive_with_manifest(
+fn restore_archive_with_manifest_and_progress<F>(
     archive_path: &Path,
     destination_root: &Path,
     manifest: &ArchiveManifest,
     selection: RestoreSelection,
-) -> anyhow::Result<RestoreResult> {
-    let selected_files: Vec<&ArchivedFileEntry> = manifest
-        .files
-        .iter()
-        .filter(|entry| {
-            let category_allowed = match entry.entry_kind.as_str() {
-                "user_data" => selection.restore_user_data,
-                "portable_app" => selection.restore_portable_apps,
-                _ => false,
-            };
-
-            if !category_allowed {
-                return false;
-            }
-
-            if selection.selected_roots.is_empty() {
-                return false;
-            }
-
-            selection.selected_roots.iter().any(|root| {
-                entry.archive_path == *root || entry.archive_path.starts_with(&format!("{root}/"))
-            })
-        })
-        .collect();
+    mut on_progress: F,
+) -> anyhow::Result<RestoreResult>
+where
+    F: FnMut(RestoreProgress),
+{
+    let selected_files = collect_selected_restore_entries(manifest, &selection);
 
     if selected_files.is_empty() {
         bail!("Archive does not contain any files to restore.");
     }
+
+    validate_restore_targets(destination_root, &selected_files)?;
 
     fs::create_dir_all(destination_root).with_context(|| {
         format!(
@@ -418,8 +477,15 @@ fn restore_archive_with_manifest(
     let mut restored_files = 0_usize;
     let mut restored_bytes = 0_u64;
     let mut skipped_existing_files = 0_usize;
+    let total_files = selected_files.len();
 
-    for entry in selected_files {
+    on_progress(RestoreProgress {
+        processed_files: 0,
+        total_files,
+        current_path: "准备恢复文件...".to_string(),
+    });
+
+    for (index, entry) in selected_files.into_iter().enumerate() {
         let relative_restore_path = validate_restore_relative_path(&entry.archive_path)?;
         let output_path = destination_root.join(&relative_restore_path);
         if let Some(parent) = output_path.parent() {
@@ -430,6 +496,11 @@ fn restore_archive_with_manifest(
         if output_path.exists() {
             if selection.skip_existing_files {
                 skipped_existing_files += 1;
+                on_progress(RestoreProgress {
+                    processed_files: index + 1,
+                    total_files,
+                    current_path: output_path.display().to_string(),
+                });
                 continue;
             }
             bail!("restore target already exists: {}", output_path.display());
@@ -474,6 +545,11 @@ fn restore_archive_with_manifest(
 
         restored_files += 1;
         restored_bytes += restored_len;
+        on_progress(RestoreProgress {
+            processed_files: index + 1,
+            total_files,
+            current_path: output_path.display().to_string(),
+        });
     }
 
     Ok(RestoreResult {
@@ -505,6 +581,67 @@ fn validate_restore_relative_path(archive_path: &str) -> anyhow::Result<PathBuf>
     Ok(relative)
 }
 
+fn collect_selected_restore_entries<'a>(
+    manifest: &'a ArchiveManifest,
+    selection: &RestoreSelection,
+) -> Vec<&'a ArchivedFileEntry> {
+    manifest
+        .files
+        .iter()
+        .filter(|entry| {
+            let category_allowed = match entry.entry_kind.as_str() {
+                "user_data" => selection.restore_user_data,
+                "portable_app" => selection.restore_portable_apps,
+                "installed_app" => selection.restore_installed_app_dirs,
+                _ => false,
+            };
+
+            if !category_allowed || selection.selected_roots.is_empty() {
+                return false;
+            }
+
+            selection.selected_roots.iter().any(|root| {
+                entry.archive_path == *root || entry.archive_path.starts_with(&format!("{root}/"))
+            })
+        })
+        .collect()
+}
+
+fn validate_restore_targets(
+    destination_root: &Path,
+    selected_files: &[&ArchivedFileEntry],
+) -> anyhow::Result<()> {
+    if let Some(blocker) = find_existing_file_in_ancestors(destination_root) {
+        bail!(
+            "restore destination is blocked by existing file: {}",
+            blocker.display()
+        );
+    }
+
+    let mut seen_targets = HashSet::new();
+    for entry in selected_files {
+        let relative_restore_path = validate_restore_relative_path(&entry.archive_path)?;
+        let output_path = destination_root.join(&relative_restore_path);
+        let output_key = path_key(&output_path);
+        if !seen_targets.insert(output_key) {
+            bail!(
+                "restore target path is duplicated in archive: {}",
+                output_path.display()
+            );
+        }
+
+        if let Some(blocker) = find_existing_file_in_ancestors(&output_path) {
+            bail!(
+                "restore target is blocked by existing file: {}",
+                blocker.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
 fn collect_manifest_restore_roots(manifest: &ArchiveManifest) -> HashSet<String> {
     let mut roots = HashSet::new();
     for root in &manifest.selected_user_roots {
@@ -516,6 +653,11 @@ fn collect_manifest_restore_roots(manifest: &ArchiveManifest) -> HashSet<String>
     }
     for app in &manifest.selected_portable_apps {
         roots.insert(format!("portable/{}", sanitize_segment(&app.display_name)));
+    }
+    for app in &manifest.installed_apps {
+        if let Some(root) = &app.backup_root {
+            roots.insert(root.clone());
+        }
     }
     roots
 }
@@ -581,13 +723,26 @@ fn create_backup_archive_at(
     preview: &crate::plan::BackupPreview,
     selected_user_roots: &HashSet<String>,
     selected_portable_apps: &HashSet<String>,
+    selected_installed_app_dirs: &HashSet<String>,
     output_dir: &Path,
 ) -> anyhow::Result<BackupResult> {
-    let pending_files =
-        collect_pending_files(preview, selected_user_roots, selected_portable_apps)?;
+    let pending_files = collect_pending_files(
+        preview,
+        selected_user_roots,
+        selected_portable_apps,
+        selected_installed_app_dirs,
+    )?;
     if pending_files.is_empty() {
         bail!("No files are selected for backup.");
     }
+
+    preview_backup_output(
+        preview,
+        selected_user_roots,
+        selected_portable_apps,
+        selected_installed_app_dirs,
+        output_dir,
+    )?;
 
     fs::create_dir_all(output_dir).with_context(|| {
         format!(
@@ -625,7 +780,12 @@ fn create_backup_archive_at(
             .installed_apps
             .iter()
             .map(|app| ManifestInstalledApp {
+                backup_root: selected_installed_app_dirs
+                    .contains(&app.selection_key())
+                    .then(|| installed_app_backup_root(app)),
                 display_name: app.display_name.clone(),
+                files_included: selected_installed_app_dirs.contains(&app.selection_key())
+                    && app.can_backup_files(),
                 source: app.source.to_string(),
                 install_location: app
                     .install_location
@@ -749,9 +909,11 @@ fn collect_pending_files(
     preview: &crate::plan::BackupPreview,
     selected_user_roots: &HashSet<String>,
     selected_portable_apps: &HashSet<String>,
+    selected_installed_app_dirs: &HashSet<String>,
 ) -> anyhow::Result<Vec<PendingFile>> {
     let mut pending = Vec::new();
     let mut seen_sources = HashSet::new();
+    let mut seen_archive_paths = HashSet::new();
 
     for root in preview
         .user_data_roots
@@ -762,11 +924,12 @@ fn collect_pending_files(
             &root.path,
             &format!(
                 "user/{}/{}",
-                sanitize_segment(root.category),
-                sanitize_segment(root.label)
+                sanitize_segment(&root.category),
+                sanitize_segment(&root.label)
             ),
             "user_data",
             &mut seen_sources,
+            &mut seen_archive_paths,
             &mut pending,
         )?;
     }
@@ -781,11 +944,36 @@ fn collect_pending_files(
             &format!("portable/{}", sanitize_segment(&app.display_name)),
             "portable_app",
             &mut seen_sources,
+            &mut seen_archive_paths,
             &mut pending,
         )?;
     }
 
+    for app in preview.installed_apps.iter().filter(|app| {
+        selected_installed_app_dirs.contains(&app.selection_key()) && app.can_backup_files()
+    }) {
+        if let Some(install_location) = &app.install_location {
+            collect_path_files(
+                install_location,
+                &installed_app_backup_root(app),
+                "installed_app",
+                &mut seen_sources,
+                &mut seen_archive_paths,
+                &mut pending,
+            )?;
+        }
+    }
+
     Ok(pending)
+}
+
+fn installed_app_backup_root(app: &crate::models::InstalledAppRecord) -> String {
+    format!(
+        "installed/{}__{}__{}",
+        sanitize_segment(&app.display_name),
+        sanitize_segment(app.source),
+        sanitize_segment(&app.uninstall_key)
+    )
 }
 
 fn collect_path_files(
@@ -793,6 +981,7 @@ fn collect_path_files(
     archive_root: &str,
     entry_kind: &'static str,
     seen_sources: &mut HashSet<String>,
+    seen_archive_paths: &mut HashSet<String>,
     pending: &mut Vec<PendingFile>,
 ) -> anyhow::Result<()> {
     if !source_root.exists() {
@@ -806,9 +995,14 @@ fn collect_path_files(
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("file");
+            let archive_path = format!("{archive_root}/{}", sanitize_segment(file_name));
+            let archive_key = archive_path.to_ascii_lowercase();
+            if !seen_archive_paths.insert(archive_key) {
+                bail!("duplicate archive entry path: {}", archive_path);
+            }
             pending.push(PendingFile {
                 source_path: source_root.to_path_buf(),
-                archive_path: format!("{archive_root}/{}", sanitize_segment(file_name)),
+                archive_path,
                 entry_kind,
             });
         }
@@ -841,9 +1035,14 @@ fn collect_path_files(
         let source_key = entry.path().display().to_string().to_lowercase();
 
         if seen_sources.insert(source_key) {
+            let archive_path = format!("{archive_root}/{relative_string}");
+            let archive_key = archive_path.to_ascii_lowercase();
+            if !seen_archive_paths.insert(archive_key) {
+                bail!("duplicate archive entry path: {}", archive_path);
+            }
             pending.push(PendingFile {
                 source_path: entry.path().to_path_buf(),
-                archive_path: format!("{archive_root}/{relative_string}"),
+                archive_path,
                 entry_kind,
             });
         }
@@ -890,6 +1089,66 @@ fn write_file_entry(archive: &mut File, pending: PendingFile) -> anyhow::Result<
     })
 }
 
+fn collect_selected_backup_source_dirs(
+    preview: &crate::plan::BackupPreview,
+    selected_user_roots: &HashSet<String>,
+    selected_portable_apps: &HashSet<String>,
+    selected_installed_app_dirs: &HashSet<String>,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut seen = HashSet::new();
+
+    for root in preview
+        .user_data_roots
+        .iter()
+        .filter(|root| selected_user_roots.contains(&path_key(&root.path)))
+    {
+        if root.path.is_dir() {
+            let key = path_key(&root.path);
+            if seen.insert(key) {
+                dirs.push(root.path.clone());
+            }
+        }
+    }
+
+    for app in preview
+        .portable_candidates
+        .iter()
+        .filter(|candidate| selected_portable_apps.contains(&path_key(&candidate.root_path)))
+    {
+        if app.root_path.is_dir() {
+            let key = path_key(&app.root_path);
+            if seen.insert(key) {
+                dirs.push(app.root_path.clone());
+            }
+        }
+    }
+
+    for app in preview.installed_apps.iter().filter(|app| {
+        selected_installed_app_dirs.contains(&app.selection_key()) && app.can_backup_files()
+    }) {
+        if let Some(install_location) = &app.install_location {
+            if install_location.is_dir() {
+                let key = path_key(install_location);
+                if seen.insert(key) {
+                    dirs.push(install_location.clone());
+                }
+            }
+        }
+    }
+
+    dirs
+}
+
+fn find_existing_file_in_ancestors(path: &Path) -> Option<PathBuf> {
+    for ancestor in path.ancestors().skip(1) {
+        if ancestor.exists() && ancestor.is_file() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
 fn sanitize_segment(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -928,13 +1187,12 @@ fn now_unix() -> u64 {
 mod tests {
     use super::{
         ArchiveManifest, ArchivedFileEntry, FOOTER_MAGIC, FORMAT_VERSION, ManifestRoot,
-        RestoreSelection, create_backup_archive_at, list_recent_archives_from_dirs,
+        RestoreSelection, list_recent_archives_from_dirs, preview_backup_output,
         preview_restore_with_manifest, read_archive_manifest, restore_archive,
         restore_archive_with_selection, verify_archive,
     };
     use crate::models::{
-        ExclusionRule, InstalledAppRecord, PathStats, PortableAppCandidate, PortableConfidence,
-        UserDataRoot,
+        InstalledAppRecord, PathStats, PortableAppCandidate, PortableConfidence, UserDataRoot,
     };
     use crate::plan::BackupPreview;
     use serde_json::{Value, json};
@@ -942,6 +1200,21 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn create_backup_archive_at(
+        preview: &BackupPreview,
+        selected_user_roots: &HashSet<String>,
+        selected_portable_apps: &HashSet<String>,
+        output_dir: &std::path::Path,
+    ) -> anyhow::Result<super::BackupResult> {
+        super::create_backup_archive_at(
+            preview,
+            selected_user_roots,
+            selected_portable_apps,
+            &HashSet::new(),
+            output_dir,
+        )
+    }
 
     #[test]
     fn writes_and_reads_archive_manifest() {
@@ -973,6 +1246,7 @@ mod tests {
                 display_name: "Git".to_string(),
                 source: "hklm-64",
                 install_location: Some(PathBuf::from("C:\\Program Files\\Git")),
+                install_stats: Some(PathStats::default()),
                 uninstall_key: "Git_is1".to_string(),
             }],
             portable_candidates: vec![PortableAppCandidate {
@@ -980,21 +1254,15 @@ mod tests {
                 root_path: portable.clone(),
                 main_executable: portable.join("Tool.exe"),
                 confidence: PortableConfidence::High,
-                default_selected: true,
                 stats: portable_stats,
                 reasons: vec!["2 executable(s) found".to_string()],
             }],
             user_data_roots: vec![UserDataRoot {
-                category: "Personal Files",
-                label: "Documents",
+                category: "Personal Files".into(),
+                label: "Documents".into(),
                 path: docs.clone(),
-                reason: "Test documents",
-                default_selected: true,
+                reason: "Test documents".into(),
                 stats: docs_stats,
-            }],
-            exclusion_rules: vec![ExclusionRule {
-                label: "Logs",
-                pattern: "Logs",
             }],
         };
 
@@ -1064,17 +1332,15 @@ mod tests {
             installed_apps: vec![],
             portable_candidates: vec![],
             user_data_roots: vec![UserDataRoot {
-                category: "Personal Files",
-                label: "Documents",
+                category: "Personal Files".into(),
+                label: "Documents".into(),
                 path: docs.clone(),
-                reason: "Test documents",
-                default_selected: true,
+                reason: "Test documents".into(),
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 5,
                 },
             }],
-            exclusion_rules: vec![],
         };
 
         let result = create_backup_archive_at(
@@ -1100,6 +1366,7 @@ mod tests {
             &RestoreSelection {
                 restore_user_data: true,
                 restore_portable_apps: false,
+                restore_installed_app_dirs: false,
                 selected_roots: HashSet::from(["user/Personal Files/Documents".to_string()]),
                 skip_existing_files: false,
             },
@@ -1107,8 +1374,69 @@ mod tests {
         .expect("preview restore");
 
         assert_eq!(preview.selected_files, 1);
+        assert_eq!(preview.new_files, 0);
         assert_eq!(preview.conflicting_files, 1);
+        assert!(preview.new_examples.is_empty());
         assert_eq!(preview.conflict_examples.len(), 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_preflight_counts_new_files_when_destination_is_empty() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-restore-preflight-new-{unique}"));
+        fs::create_dir_all(&root).expect("create test root");
+        let docs = root.join("Docs");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::write(docs.join("note.txt"), b"hello").expect("write docs");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files".into(),
+                label: "Documents".into(),
+                path: docs.clone(),
+                reason: "Test documents".into(),
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 5,
+                },
+            }],
+        };
+
+        let result = create_backup_archive_at(
+            &preview,
+            &HashSet::from([docs.display().to_string().to_lowercase()]),
+            &HashSet::new(),
+            &root.join("archive"),
+        )
+        .expect("create archive");
+        let manifest = read_archive_manifest(&result.archive_path).expect("read manifest");
+        let restore_dir = root.join("restore");
+
+        let preview = preview_restore_with_manifest(
+            &restore_dir,
+            &manifest,
+            &RestoreSelection {
+                restore_user_data: true,
+                restore_portable_apps: false,
+                restore_installed_app_dirs: false,
+                selected_roots: HashSet::from(["user/Personal Files/Documents".to_string()]),
+                skip_existing_files: false,
+            },
+        )
+        .expect("preview restore");
+
+        assert_eq!(preview.selected_files, 1);
+        assert_eq!(preview.new_files, 1);
+        assert_eq!(preview.conflicting_files, 0);
+        assert_eq!(preview.new_examples.len(), 1);
+        assert!(preview.conflict_examples.is_empty());
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1155,6 +1483,7 @@ mod tests {
             &RestoreSelection {
                 restore_user_data: true,
                 restore_portable_apps: false,
+                restore_installed_app_dirs: false,
                 selected_roots: HashSet::from(["user/Personal Files/Documents".to_string()]),
                 skip_existing_files: false,
             },
@@ -1164,6 +1493,166 @@ mod tests {
         assert!(error.to_string().contains("existing file"));
 
         let _ = fs::remove_file(destination_file);
+    }
+
+    #[test]
+    fn backup_preflight_rejects_output_inside_selected_source_dir() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-backup-overlap-{unique}"));
+        let docs = root.join("Documents");
+        fs::create_dir_all(&docs).expect("create docs");
+        fs::write(docs.join("note.txt"), b"hello").expect("write docs");
+
+        let preview = BackupPreview {
+            installed_apps: vec![],
+            portable_candidates: vec![],
+            user_data_roots: vec![UserDataRoot {
+                category: "Personal Files".into(),
+                label: "Documents".into(),
+                path: docs.clone(),
+                reason: "Test documents".into(),
+                stats: PathStats {
+                    file_count: 1,
+                    total_bytes: 5,
+                },
+            }],
+        };
+
+        let error = preview_backup_output(
+            &preview,
+            &HashSet::from([docs.display().to_string().to_lowercase()]),
+            &HashSet::new(),
+            &HashSet::new(),
+            &docs.join("Backups"),
+        )
+        .expect_err("output inside selected source should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("overlaps selected source directory")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_preflight_rejects_parent_path_blocked_by_file() {
+        let manifest = ArchiveManifest {
+            format_version: 1,
+            created_at_unix: 1,
+            app_name: "WinRehome".to_string(),
+            app_version: "0.1.0".to_string(),
+            installed_apps: vec![],
+            selected_user_roots: vec![ManifestRoot {
+                category: "Personal Files".to_string(),
+                label: "Documents".to_string(),
+                path: "C:\\Users\\Sunny\\Documents".to_string(),
+                reason: "Test".to_string(),
+            }],
+            selected_portable_apps: vec![],
+            files: vec![ArchivedFileEntry {
+                source_path: "a".to_string(),
+                archive_path: "user/Personal Files/Documents/note.txt".to_string(),
+                entry_kind: "user_data".to_string(),
+                offset: 0,
+                stored_size: 1,
+                original_size: 1,
+                crc32: 1,
+            }],
+            original_bytes: 1,
+            stored_bytes: 1,
+        };
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-restore-blocker-{unique}"));
+        fs::create_dir_all(root.join("user/Personal Files")).expect("create restore dirs");
+        fs::write(root.join("user/Personal Files/Documents"), b"blocker")
+            .expect("write blocker file");
+
+        let error = preview_restore_with_manifest(
+            &root,
+            &manifest,
+            &RestoreSelection {
+                restore_user_data: true,
+                restore_portable_apps: false,
+                restore_installed_app_dirs: false,
+                selected_roots: HashSet::from(["user/Personal Files/Documents".to_string()]),
+                skip_existing_files: false,
+            },
+        )
+        .expect_err("parent file blocker should be rejected");
+
+        assert!(error.to_string().contains("blocked by existing file"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_preflight_rejects_duplicate_output_paths() {
+        let manifest = ArchiveManifest {
+            format_version: 1,
+            created_at_unix: 1,
+            app_name: "WinRehome".to_string(),
+            app_version: "0.1.0".to_string(),
+            installed_apps: vec![],
+            selected_user_roots: vec![ManifestRoot {
+                category: "Personal Files".to_string(),
+                label: "Documents".to_string(),
+                path: "C:\\Users\\Sunny\\Documents".to_string(),
+                reason: "Test".to_string(),
+            }],
+            selected_portable_apps: vec![],
+            files: vec![
+                ArchivedFileEntry {
+                    source_path: "a".to_string(),
+                    archive_path: "user/Personal Files/Documents/Note.txt".to_string(),
+                    entry_kind: "user_data".to_string(),
+                    offset: 0,
+                    stored_size: 1,
+                    original_size: 1,
+                    crc32: 1,
+                },
+                ArchivedFileEntry {
+                    source_path: "b".to_string(),
+                    archive_path: "user/Personal Files/Documents/note.txt".to_string(),
+                    entry_kind: "user_data".to_string(),
+                    offset: 1,
+                    stored_size: 1,
+                    original_size: 1,
+                    crc32: 2,
+                },
+            ],
+            original_bytes: 2,
+            stored_bytes: 2,
+        };
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-restore-duplicate-{unique}"));
+        fs::create_dir_all(&root).expect("create restore dir");
+
+        let error = preview_restore_with_manifest(
+            &root,
+            &manifest,
+            &RestoreSelection {
+                restore_user_data: true,
+                restore_portable_apps: false,
+                restore_installed_app_dirs: false,
+                selected_roots: HashSet::from(["user/Personal Files/Documents".to_string()]),
+                skip_existing_files: false,
+            },
+        )
+        .expect_err("duplicate target paths should be rejected");
+
+        assert!(error.to_string().contains("duplicated in archive"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1188,7 +1677,6 @@ mod tests {
                 root_path: portable.clone(),
                 main_executable: portable.join("Tool.exe"),
                 confidence: PortableConfidence::High,
-                default_selected: true,
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 9,
@@ -1196,17 +1684,15 @@ mod tests {
                 reasons: vec!["portable".to_string()],
             }],
             user_data_roots: vec![UserDataRoot {
-                category: "Personal Files",
-                label: "Documents",
+                category: "Personal Files".into(),
+                label: "Documents".into(),
                 path: docs.clone(),
-                reason: "Test documents",
-                default_selected: true,
+                reason: "Test documents".into(),
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 11,
                 },
             }],
-            exclusion_rules: vec![],
         };
 
         let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
@@ -1255,17 +1741,15 @@ mod tests {
             installed_apps: vec![],
             portable_candidates: vec![],
             user_data_roots: vec![UserDataRoot {
-                category: "Personal Files",
-                label: "Documents",
+                category: "Personal Files".into(),
+                label: "Documents".into(),
                 path: docs.clone(),
-                reason: "Test documents",
-                default_selected: true,
+                reason: "Test documents".into(),
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 5,
                 },
             }],
-            exclusion_rules: vec![],
         };
 
         let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
@@ -1316,7 +1800,6 @@ mod tests {
                 root_path: portable.clone(),
                 main_executable: portable.join("Tool.exe"),
                 confidence: PortableConfidence::High,
-                default_selected: true,
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 9,
@@ -1324,17 +1807,15 @@ mod tests {
                 reasons: vec!["portable".to_string()],
             }],
             user_data_roots: vec![UserDataRoot {
-                category: "Personal Files",
-                label: "Documents",
+                category: "Personal Files".into(),
+                label: "Documents".into(),
                 path: docs.clone(),
-                reason: "Test documents",
-                default_selected: true,
+                reason: "Test documents".into(),
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 11,
                 },
             }],
-            exclusion_rules: vec![],
         };
 
         let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
@@ -1355,6 +1836,7 @@ mod tests {
             RestoreSelection {
                 restore_user_data: true,
                 restore_portable_apps: false,
+                restore_installed_app_dirs: false,
                 selected_roots: HashSet::from(["user/Personal Files/Documents".to_string()]),
                 skip_existing_files: false,
             },
@@ -1395,7 +1877,6 @@ mod tests {
                 root_path: portable.clone(),
                 main_executable: portable.join("Tool.exe"),
                 confidence: PortableConfidence::High,
-                default_selected: true,
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 9,
@@ -1403,17 +1884,15 @@ mod tests {
                 reasons: vec!["portable".to_string()],
             }],
             user_data_roots: vec![UserDataRoot {
-                category: "Personal Files",
-                label: "Documents",
+                category: "Personal Files".into(),
+                label: "Documents".into(),
                 path: docs.clone(),
-                reason: "Test documents",
-                default_selected: true,
+                reason: "Test documents".into(),
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 11,
                 },
             }],
-            exclusion_rules: vec![],
         };
 
         let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
@@ -1434,6 +1913,7 @@ mod tests {
             RestoreSelection {
                 restore_user_data: true,
                 restore_portable_apps: true,
+                restore_installed_app_dirs: false,
                 selected_roots: HashSet::from(["portable/PortableTool".to_string()]),
                 skip_existing_files: false,
             },
@@ -1474,7 +1954,6 @@ mod tests {
                 root_path: portable.clone(),
                 main_executable: portable.join("Tool.exe"),
                 confidence: PortableConfidence::High,
-                default_selected: true,
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 9,
@@ -1482,17 +1961,15 @@ mod tests {
                 reasons: vec!["portable".to_string()],
             }],
             user_data_roots: vec![UserDataRoot {
-                category: "Personal Files",
-                label: "Documents",
+                category: "Personal Files".into(),
+                label: "Documents".into(),
                 path: docs.clone(),
-                reason: "Test documents",
-                default_selected: true,
+                reason: "Test documents".into(),
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 11,
                 },
             }],
-            exclusion_rules: vec![],
         };
 
         let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
@@ -1519,6 +1996,7 @@ mod tests {
             RestoreSelection {
                 restore_user_data: true,
                 restore_portable_apps: true,
+                restore_installed_app_dirs: false,
                 selected_roots: HashSet::from([
                     "user/Personal Files/Documents".to_string(),
                     "portable/PortableTool".to_string(),
@@ -1560,17 +2038,15 @@ mod tests {
             installed_apps: vec![],
             portable_candidates: vec![],
             user_data_roots: vec![UserDataRoot {
-                category: "Personal Files",
-                label: "Documents",
+                category: "Personal Files".into(),
+                label: "Documents".into(),
                 path: docs.clone(),
-                reason: "Test documents",
-                default_selected: true,
+                reason: "Test documents".into(),
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 5,
                 },
             }],
-            exclusion_rules: vec![],
         };
 
         let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
@@ -1587,6 +2063,7 @@ mod tests {
             RestoreSelection {
                 restore_user_data: true,
                 restore_portable_apps: false,
+                restore_installed_app_dirs: false,
                 selected_roots: HashSet::new(),
                 skip_existing_files: false,
             },
@@ -1614,17 +2091,15 @@ mod tests {
             installed_apps: vec![],
             portable_candidates: vec![],
             user_data_roots: vec![UserDataRoot {
-                category: "Personal Files",
-                label: "Documents",
+                category: "Personal Files".into(),
+                label: "Documents".into(),
                 path: docs.clone(),
-                reason: "Test documents",
-                default_selected: true,
+                reason: "Test documents".into(),
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 12,
                 },
             }],
-            exclusion_rules: vec![],
         };
 
         let selected_user_roots = HashSet::from([docs.display().to_string().to_lowercase()]);
@@ -1659,17 +2134,15 @@ mod tests {
             installed_apps: vec![],
             portable_candidates: vec![],
             user_data_roots: vec![UserDataRoot {
-                category: "Personal Files",
-                label: "Documents",
+                category: "Personal Files".into(),
+                label: "Documents".into(),
                 path: docs.clone(),
-                reason: "Test documents",
-                default_selected: true,
+                reason: "Test documents".into(),
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 5,
                 },
             }],
-            exclusion_rules: vec![],
         };
 
         let archive = create_backup_archive_at(
@@ -1723,17 +2196,15 @@ mod tests {
             installed_apps: vec![],
             portable_candidates: vec![],
             user_data_roots: vec![UserDataRoot {
-                category: "Personal Files",
-                label: "Documents",
+                category: "Personal Files".into(),
+                label: "Documents".into(),
                 path: docs.clone(),
-                reason: "Test documents",
-                default_selected: true,
+                reason: "Test documents".into(),
                 stats: PathStats {
                     file_count: 1,
                     total_bytes: 5,
                 },
             }],
-            exclusion_rules: vec![],
         };
 
         let archive = create_backup_archive_at(

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -5,7 +6,23 @@ pub struct InstalledAppRecord {
     pub display_name: String,
     pub source: &'static str,
     pub install_location: Option<PathBuf>,
+    pub install_stats: Option<PathStats>,
     pub uninstall_key: String,
+}
+
+impl InstalledAppRecord {
+    pub fn selection_key(&self) -> String {
+        format!(
+            "{}|{}|{}",
+            self.source.to_lowercase(),
+            self.uninstall_key.to_lowercase(),
+            self.display_name.to_lowercase()
+        )
+    }
+
+    pub fn can_backup_files(&self) -> bool {
+        self.install_location.is_some() && self.install_stats.is_some()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -14,7 +31,6 @@ pub struct PortableAppCandidate {
     pub root_path: PathBuf,
     pub main_executable: PathBuf,
     pub confidence: PortableConfidence,
-    pub default_selected: bool,
     pub stats: PathStats,
     pub reasons: Vec<String>,
 }
@@ -38,18 +54,11 @@ pub enum PortableConfidence {
 
 #[derive(Debug, Clone)]
 pub struct UserDataRoot {
-    pub category: &'static str,
-    pub label: &'static str,
+    pub category: Cow<'static, str>,
+    pub label: Cow<'static, str>,
     pub path: PathBuf,
-    pub reason: &'static str,
-    pub default_selected: bool,
+    pub reason: Cow<'static, str>,
     pub stats: PathStats,
-}
-
-#[derive(Debug, Clone)]
-pub struct ExclusionRule {
-    pub label: &'static str,
-    pub pattern: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
