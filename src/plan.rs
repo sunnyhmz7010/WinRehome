@@ -21,6 +21,12 @@ struct UserDataCandidateSpec {
 }
 
 #[derive(Debug, Clone)]
+struct DiscoveredUserDataCandidate {
+    spec: UserDataCandidateSpec,
+    score: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct CustomUserDataRoot {
     pub path: PathBuf,
     pub label: Option<String>,
@@ -114,14 +120,18 @@ where
         });
     });
     let installed_apps = installed_apps?;
-    let user_data_roots =
-        collect_user_data_roots_with_progress(custom_user_roots, |current, total, detail| {
+    let user_data_roots = collect_user_data_roots_with_progress(
+        scan_roots,
+        excluded_scan_roots,
+        custom_user_roots,
+        |current, total, detail| {
             on_progress(ScanProgress {
                 fraction: scale_progress(0.48, 0.78, current, total),
                 stage: "收集个人文件".to_string(),
                 detail,
             });
-        })?;
+        },
+    )?;
     let portable_candidates = scan_portable_candidates_with_progress(
         &installed_apps,
         scan_roots,
@@ -134,6 +144,8 @@ where
             });
         },
     )?;
+    let user_data_roots =
+        filter_user_data_roots_against_portable_candidates(user_data_roots, &portable_candidates);
     on_progress(ScanProgress {
         fraction: 0.98,
         stage: "整理结果".to_string(),
@@ -254,6 +266,8 @@ where
 }
 
 fn collect_user_data_roots_with_progress<F>(
+    scan_roots: &[PathBuf],
+    excluded_scan_roots: &[PathBuf],
     custom_user_roots: &[CustomUserDataRoot],
     mut on_progress: F,
 ) -> anyhow::Result<Vec<UserDataRoot>>
@@ -265,6 +279,10 @@ where
     let roaming = profile.join("AppData\\Roaming");
     let local = profile.join("AppData\\Local");
     let mut candidates = default_user_data_candidates(&profile, &roaming, &local);
+    candidates.extend(discover_scan_root_user_data_candidates(
+        scan_roots,
+        excluded_scan_roots,
+    ));
     candidates.extend(custom_user_data_candidates(custom_user_roots));
     let total_candidates = candidates.len().max(1);
 
@@ -295,6 +313,564 @@ where
     }
 
     Ok(roots)
+}
+
+fn filter_user_data_roots_against_portable_candidates(
+    roots: Vec<UserDataRoot>,
+    portable_candidates: &[PortableAppCandidate],
+) -> Vec<UserDataRoot> {
+    roots
+        .into_iter()
+        .filter(|root| {
+            !portable_candidates.iter().any(|candidate| {
+                root.path == candidate.root_path || root.path.starts_with(&candidate.root_path)
+            })
+        })
+        .collect()
+}
+
+fn discover_scan_root_user_data_candidates(
+    scan_roots: &[PathBuf],
+    excluded_scan_roots: &[PathBuf],
+) -> Vec<UserDataCandidateSpec> {
+    let excluded_keys: Vec<String> = excluded_scan_roots
+        .iter()
+        .map(|path| path_key(path))
+        .collect();
+    let mut discovered = Vec::new();
+    let mut seen = HashSet::new();
+
+    for root in scan_roots {
+        if !root.exists() || !root.is_dir() || is_path_excluded(root, excluded_keys.as_slice()) {
+            continue;
+        }
+
+        let mut walker = WalkDir::new(root).min_depth(1).max_depth(2).into_iter();
+        while let Some(entry) = walker.next() {
+            let entry = match entry {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            let dir_like = entry.file_type().is_dir()
+                || (entry.file_type().is_symlink()
+                    && fs::metadata(path)
+                        .map(|metadata| metadata.is_dir())
+                        .unwrap_or(false));
+            let file_like = entry.file_type().is_file()
+                || (entry.file_type().is_symlink()
+                    && fs::metadata(path)
+                        .map(|metadata| metadata.is_file())
+                        .unwrap_or(false));
+
+            if is_path_excluded(path, excluded_keys.as_slice()) {
+                if dir_like {
+                    walker.skip_current_dir();
+                }
+                continue;
+            }
+            if dir_like && should_skip_portable_search_dir(root, path) {
+                walker.skip_current_dir();
+                continue;
+            }
+            if is_known_noise(path) {
+                if dir_like {
+                    walker.skip_current_dir();
+                }
+                continue;
+            }
+
+            let candidate_key = path_key(path);
+            if file_like {
+                if entry.depth() == 1 {
+                    if let Some(candidate) = classify_scan_root_user_file_candidate(path) {
+                        if seen.insert(candidate_key) {
+                            discovered.push(DiscoveredUserDataCandidate {
+                                score: user_data_file_candidate_score(path),
+                                spec: candidate,
+                            });
+                        }
+                    }
+                }
+                continue;
+            }
+            if !dir_like {
+                continue;
+            }
+
+            if let Some((candidate, score)) = evaluate_scan_root_user_directory_candidate(path) {
+                if seen.insert(candidate_key) {
+                    discovered.push(DiscoveredUserDataCandidate {
+                        spec: candidate,
+                        score,
+                    });
+                }
+            }
+        }
+    }
+
+    reconcile_discovered_user_data_candidates(discovered)
+}
+
+fn classify_scan_root_user_file_candidate(path: &Path) -> Option<UserDataCandidateSpec> {
+    let kind = classify_user_data_file_kind(path)?;
+    Some(UserDataCandidateSpec {
+        category: user_data_category_for_kind(kind).to_string(),
+        label: default_custom_user_data_label(path),
+        path: path.to_path_buf(),
+        reason: user_data_reason_for_kind(kind).to_string(),
+    })
+}
+
+fn user_data_file_candidate_score(path: &Path) -> usize {
+    let kind = classify_user_data_file_kind(path).unwrap_or(UserDataValueKind::Documents);
+    let base = match kind {
+        UserDataValueKind::DiskImages => 150,
+        UserDataValueKind::DeveloperData => 130,
+        UserDataValueKind::AppData => 120,
+        UserDataValueKind::Archives => 110,
+        UserDataValueKind::Media => 100,
+        UserDataValueKind::Documents => 90,
+    };
+    let size_bonus = fs::metadata(path)
+        .map(|metadata| (metadata.len() / (1024 * 1024)).min(50) as usize)
+        .unwrap_or(0);
+    base + size_bonus
+}
+
+#[cfg(test)]
+fn classify_scan_root_user_directory_candidate(path: &Path) -> Option<UserDataCandidateSpec> {
+    evaluate_scan_root_user_directory_candidate(path).map(|(candidate, _)| candidate)
+}
+
+fn evaluate_scan_root_user_directory_candidate(
+    path: &Path,
+) -> Option<(UserDataCandidateSpec, usize)> {
+    let evidence = collect_user_data_directory_evidence(path);
+    let kind = classify_user_data_directory_kind(path, &evidence)?;
+    let score = user_data_directory_candidate_score(kind, path, &evidence);
+    let candidate = UserDataCandidateSpec {
+        category: user_data_category_for_kind(kind).to_string(),
+        label: default_custom_user_data_label(path),
+        path: path.to_path_buf(),
+        reason: user_data_reason_for_kind(kind).to_string(),
+    };
+    Some((candidate, score))
+}
+
+fn user_data_directory_candidate_score(
+    kind: UserDataValueKind,
+    path: &Path,
+    evidence: &UserDataDirectoryEvidence,
+) -> usize {
+    let base = match kind {
+        UserDataValueKind::DiskImages => 160,
+        UserDataValueKind::DeveloperData => 140,
+        UserDataValueKind::AppData => 130,
+        UserDataValueKind::Archives => 120,
+        UserDataValueKind::Media => 110,
+        UserDataValueKind::Documents => 100,
+    };
+    let evidence_bonus = evidence.document_files.min(12)
+        + evidence.media_files.min(12)
+        + evidence.archive_files.min(8) * 2
+        + evidence.disk_image_files.min(8) * 4
+        + evidence.notebook_files.min(8) * 5
+        + evidence.app_data_files.min(12) * 3
+        + evidence.android_avd_child_dirs.min(4) * 8
+        + evidence.android_sdk_component_dirs.min(6) * 8
+        + evidence.config_dir_hits.min(6) * 4;
+    let generic_name_penalty = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(is_generic_user_container_name) as usize
+        * 20;
+
+    base + evidence_bonus - generic_name_penalty
+}
+
+fn reconcile_discovered_user_data_candidates(
+    mut candidates: Vec<DiscoveredUserDataCandidate>,
+) -> Vec<UserDataCandidateSpec> {
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| {
+                right
+                    .spec
+                    .path
+                    .components()
+                    .count()
+                    .cmp(&left.spec.path.components().count())
+            })
+            .then_with(|| left.spec.label.cmp(&right.spec.label))
+    });
+
+    let mut kept: Vec<DiscoveredUserDataCandidate> = Vec::new();
+    for candidate in candidates {
+        if kept
+            .iter()
+            .any(|existing| paths_overlap(&existing.spec.path, &candidate.spec.path))
+        {
+            continue;
+        }
+        kept.push(candidate);
+    }
+
+    kept.sort_by(|left, right| left.spec.label.cmp(&right.spec.label));
+    kept.into_iter().map(|candidate| candidate.spec).collect()
+}
+
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    left == right || left.starts_with(right) || right.starts_with(left)
+}
+
+fn collect_user_data_directory_evidence(path: &Path) -> UserDataDirectoryEvidence {
+    let mut evidence = UserDataDirectoryEvidence::default();
+    let directory_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    evidence.wallpaper_name_hint = directory_name.contains("wallpaper")
+        || directory_name.contains("background")
+        || directory_name.contains("壁纸");
+    evidence.notebook_name_hint =
+        directory_name.contains("jupyter") || directory_name.contains("notebook");
+
+    let mut walker = WalkDir::new(path)
+        .follow_links(true)
+        .min_depth(1)
+        .max_depth(4)
+        .into_iter();
+    while let Some(entry) = walker.next() {
+        let entry = match entry {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let entry_path = entry.path();
+        if should_exclude_path(entry_path) {
+            if entry.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
+
+        if entry.file_type().is_dir() {
+            if entry.depth() == 1
+                && entry_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| name.to_ascii_lowercase().ends_with(".avd"))
+            {
+                evidence.android_avd_child_dirs += 1;
+            }
+            if entry.depth() == 1
+                && entry_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(is_android_sdk_component_directory_name)
+            {
+                evidence.android_sdk_component_dirs += 1;
+            }
+            if entry.depth() <= 2
+                && entry_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(is_probable_app_data_directory_name)
+            {
+                evidence.config_dir_hits += 1;
+            }
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        evidence.total_files += 1;
+        if is_executable_file(entry_path) {
+            evidence.executable_files += 1;
+        }
+        if evidence.total_files >= 400 {
+            break;
+        }
+
+        match classify_user_data_file_kind(entry_path) {
+            Some(UserDataValueKind::Documents) => evidence.document_files += 1,
+            Some(UserDataValueKind::Media) => evidence.media_files += 1,
+            Some(UserDataValueKind::Archives) => evidence.archive_files += 1,
+            Some(UserDataValueKind::DiskImages) => evidence.disk_image_files += 1,
+            Some(UserDataValueKind::DeveloperData) => evidence.notebook_files += 1,
+            Some(UserDataValueKind::AppData) => evidence.app_data_files += 1,
+            None => {}
+        }
+
+        if entry_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(is_android_avd_marker_file_name)
+        {
+            evidence.android_avd_marker_files += 1;
+        }
+    }
+
+    evidence
+}
+
+fn classify_user_data_directory_kind(
+    _path: &Path,
+    evidence: &UserDataDirectoryEvidence,
+) -> Option<UserDataValueKind> {
+    if evidence.android_sdk_component_dirs >= 3 {
+        return Some(UserDataValueKind::DeveloperData);
+    }
+    if evidence.android_avd_child_dirs >= 1
+        || (evidence.android_avd_marker_files >= 2 && evidence.disk_image_files >= 1)
+    {
+        return Some(UserDataValueKind::DeveloperData);
+    }
+    if evidence.notebook_files >= 1 {
+        return Some(UserDataValueKind::DeveloperData);
+    }
+    if evidence.disk_image_files >= 1 {
+        return Some(UserDataValueKind::DiskImages);
+    }
+    if evidence.app_data_files >= 8 && evidence.executable_files == 0 {
+        return Some(UserDataValueKind::AppData);
+    }
+    if evidence.config_dir_hits >= 2
+        && evidence.app_data_files >= 2
+        && evidence.executable_files == 0
+    {
+        return Some(UserDataValueKind::AppData);
+    }
+    if evidence.archive_files >= 3 && evidence.executable_files == 0 {
+        return Some(UserDataValueKind::Archives);
+    }
+    if evidence.media_files >= 8 && evidence.executable_files == 0 {
+        return Some(UserDataValueKind::Media);
+    }
+    if evidence.wallpaper_name_hint && evidence.media_files >= 1 && evidence.executable_files == 0 {
+        return Some(UserDataValueKind::Media);
+    }
+    if evidence.document_files >= 5 && evidence.executable_files == 0 {
+        return Some(UserDataValueKind::Documents);
+    }
+    if evidence.notebook_name_hint && evidence.document_files >= 2 && evidence.executable_files == 0
+    {
+        return Some(UserDataValueKind::DeveloperData);
+    }
+
+    None
+}
+
+fn classify_user_data_file_kind(path: &Path) -> Option<UserDataValueKind> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let kind = if extension.as_deref().is_some_and(|extension| {
+        matches!(
+            extension,
+            "doc"
+                | "docx"
+                | "xls"
+                | "xlsx"
+                | "ppt"
+                | "pptx"
+                | "pdf"
+                | "txt"
+                | "md"
+                | "csv"
+                | "rtf"
+                | "xmind"
+        )
+    }) {
+        UserDataValueKind::Documents
+    } else if extension.as_deref().is_some_and(|extension| {
+        matches!(
+            extension,
+            "jpg"
+                | "jpeg"
+                | "png"
+                | "webp"
+                | "bmp"
+                | "gif"
+                | "tif"
+                | "tiff"
+                | "heic"
+                | "psd"
+                | "kra"
+                | "mp4"
+                | "mkv"
+                | "mov"
+                | "avi"
+                | "wmv"
+                | "mp3"
+                | "flac"
+                | "wav"
+                | "m4a"
+        )
+    }) {
+        UserDataValueKind::Media
+    } else if extension.as_deref().is_some_and(|extension| {
+        matches!(
+            extension,
+            "zip" | "7z" | "rar" | "tar" | "gz" | "bz2" | "xz" | "zst"
+        )
+    }) {
+        UserDataValueKind::Archives
+    } else if extension.as_deref().is_some_and(|extension| {
+        matches!(
+            extension,
+            "iso" | "img" | "vhd" | "vhdx" | "vmdk" | "qcow2" | "vdi" | "ova" | "ovf"
+        )
+    }) {
+        UserDataValueKind::DiskImages
+    } else if extension.as_deref() == Some("ipynb") {
+        UserDataValueKind::DeveloperData
+    } else if extension.as_deref().is_some_and(|extension| {
+        matches!(
+            extension,
+            "db" | "sqlite" | "sqlite3" | "dat" | "json" | "ini" | "cfg" | "wal" | "shm" | "xml"
+        )
+    }) || is_probable_app_data_file_name(&file_name)
+    {
+        UserDataValueKind::AppData
+    } else {
+        return None;
+    };
+
+    fs::metadata(path)
+        .ok()
+        .filter(|metadata| metadata.len() > 0)
+        .map(|_| kind)
+}
+
+fn user_data_category_for_kind(kind: UserDataValueKind) -> &'static str {
+    match kind {
+        UserDataValueKind::Documents => "Personal Files",
+        UserDataValueKind::Media => "Personal Media",
+        UserDataValueKind::Archives => "Archives",
+        UserDataValueKind::DiskImages => "Disk Images",
+        UserDataValueKind::DeveloperData => "Developer Data",
+        UserDataValueKind::AppData => "App Data",
+    }
+}
+
+fn user_data_reason_for_kind(kind: UserDataValueKind) -> &'static str {
+    match kind {
+        UserDataValueKind::Documents => {
+            "Document-heavy folders usually contain user-authored work worth migrating."
+        }
+        UserDataValueKind::Media => {
+            "Media-heavy folders often contain personal assets that are expensive to rebuild."
+        }
+        UserDataValueKind::Archives => {
+            "Archive-heavy folders may contain curated packages or backups worth preserving."
+        }
+        UserDataValueKind::DiskImages => {
+            "Disk image and virtual-machine files are large but often intentional user assets."
+        }
+        UserDataValueKind::DeveloperData => {
+            "Developer workspaces such as notebooks or emulator data can be costly to recreate."
+        }
+        UserDataValueKind::AppData => {
+            "Application data folders often contain databases, configuration, and account state worth migrating."
+        }
+    }
+}
+
+fn is_android_avd_marker_file_name(file_name: &str) -> bool {
+    let lowered = file_name.trim().to_ascii_lowercase();
+    matches!(
+        lowered.as_str(),
+        "config.ini"
+            | "hardware-qemu.ini"
+            | "userdata-qemu.img"
+            | "cache.img"
+            | "sdcard.img"
+            | "multiinstance.lock"
+    )
+}
+
+fn is_android_sdk_component_directory_name(directory_name: &str) -> bool {
+    let lowered = directory_name.trim().to_ascii_lowercase();
+    matches!(
+        lowered.as_str(),
+        "platforms"
+            | "platform-tools"
+            | "build-tools"
+            | "cmdline-tools"
+            | "emulator"
+            | "skins"
+            | "sources"
+            | "system-images"
+            | "ndk"
+            | "extras"
+            | "licenses"
+            | "patcher"
+    )
+}
+
+fn is_generic_user_container_name(directory_name: &str) -> bool {
+    let lowered = directory_name.trim().to_ascii_lowercase();
+    matches!(
+        lowered.as_str(),
+        "files"
+            | "data"
+            | "backup"
+            | "backups"
+            | "work"
+            | "workspace"
+            | "images"
+            | "media"
+            | "misc"
+            | "other"
+            | "others"
+    )
+}
+
+fn is_probable_app_data_directory_name(directory_name: &str) -> bool {
+    let lowered = directory_name.trim().to_ascii_lowercase();
+    matches!(
+        lowered.as_str(),
+        "config"
+            | "configs"
+            | "data"
+            | "backup"
+            | "backups"
+            | "db"
+            | "database"
+            | "databases"
+            | "sqlite"
+            | "login"
+            | "profiles"
+            | "profile"
+            | "head_imgs"
+            | "finderlive"
+            | "nt_db"
+            | "nt_data"
+    )
+}
+
+fn is_probable_app_data_file_name(file_name: &str) -> bool {
+    let lowered = file_name.trim().to_ascii_lowercase();
+    lowered.contains("config")
+        || lowered.contains("session")
+        || lowered.contains("key_info")
+        || lowered.contains("backup")
+        || matches!(
+            lowered.as_str(),
+            "global_config" | "client_config" | "lock.ini"
+        )
 }
 
 fn default_user_data_candidates(
@@ -635,7 +1211,6 @@ where
     }
 
     candidates.sort_by(|left, right| left.display_name.cmp(&right.display_name));
-    candidates.truncate(100);
     Ok(candidates)
 }
 
@@ -753,6 +1328,34 @@ struct PortableDirectoryEvidence {
     auxiliary_executable_hits: usize,
     weak_eligible_executable_hits: usize,
     curated_location: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UserDataValueKind {
+    Documents,
+    Media,
+    Archives,
+    DiskImages,
+    DeveloperData,
+    AppData,
+}
+
+#[derive(Debug, Clone, Default)]
+struct UserDataDirectoryEvidence {
+    document_files: usize,
+    media_files: usize,
+    archive_files: usize,
+    disk_image_files: usize,
+    notebook_files: usize,
+    app_data_files: usize,
+    android_avd_marker_files: usize,
+    android_avd_child_dirs: usize,
+    android_sdk_component_dirs: usize,
+    config_dir_hits: usize,
+    executable_files: usize,
+    total_files: usize,
+    wallpaper_name_hint: bool,
+    notebook_name_hint: bool,
 }
 
 fn evaluate_portable_directory(
@@ -1549,12 +2152,16 @@ pub fn path_key(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
+        classify_scan_root_user_directory_candidate, classify_scan_root_user_file_candidate,
         custom_user_data_category, default_custom_user_data_label, default_user_data_candidates,
-        evaluate_portable_directory, evaluate_portable_executable, infer_portable_display_name,
-        is_known_noise, is_system_install_path, normalize_portable_display_name,
+        discover_scan_root_user_data_candidates, evaluate_portable_directory,
+        evaluate_portable_executable, filter_user_data_roots_against_portable_candidates,
+        infer_portable_display_name, is_known_noise, is_system_install_path,
+        normalize_portable_display_name,
     };
+    use crate::models::{PathStats, PortableAppCandidate, PortableConfidence, UserDataRoot};
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1905,5 +2512,217 @@ mod tests {
             default_custom_user_data_label(Path::new("C:\\Users\\Sunny\\.tool-rc")),
             ".tool-rc"
         );
+    }
+
+    #[test]
+    fn classifies_root_level_disk_image_file_candidate() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-user-file-{unique}"));
+        fs::create_dir_all(&root).expect("create root dir");
+        let iso = root.join("zh-cn_windows_11_business.iso");
+        fs::write(&iso, b"iso").expect("write iso");
+
+        let candidate =
+            classify_scan_root_user_file_candidate(&iso).expect("iso file should be classified");
+        assert_eq!(candidate.category, "Disk Images");
+        assert_eq!(candidate.label, "zh-cn_windows_11_business.iso");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn classifies_directory_candidates_from_content_evidence() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-user-dir-{unique}"));
+        let wallpapers = root.join("Wallpapers");
+        let notebooks = root.join("Research");
+        let avd = root.join("AndroidDevices");
+        let app_data = root.join("ChatData");
+        fs::create_dir_all(&wallpapers).expect("create wallpapers dir");
+        fs::create_dir_all(&notebooks).expect("create notebooks dir");
+        fs::create_dir_all(avd.join("Pixel_9.avd")).expect("create avd child dir");
+        fs::create_dir_all(app_data.join("config")).expect("create app config dir");
+        fs::create_dir_all(app_data.join("backup")).expect("create app backup dir");
+        fs::write(wallpapers.join("1.jpg"), b"jpg").expect("write image 1");
+        fs::write(notebooks.join("analysis.ipynb"), b"{}").expect("write notebook");
+        fs::write(avd.join("config.ini"), b"[avd]").expect("write avd config");
+        fs::write(avd.join("userdata-qemu.img"), b"img").expect("write avd image");
+        fs::write(app_data.join("config\\global_config"), b"cfg").expect("write config file");
+        fs::write(app_data.join("config\\key_info.db"), b"db").expect("write db file");
+        fs::write(app_data.join("backup\\session.dat"), b"dat").expect("write dat file");
+        fs::write(app_data.join("backup\\meta.json"), b"json").expect("write json file");
+
+        let wallpaper_candidate = classify_scan_root_user_directory_candidate(&wallpapers)
+            .expect("wallpaper dir should be classified");
+        let notebook_candidate = classify_scan_root_user_directory_candidate(&notebooks)
+            .expect("notebook dir should be classified");
+        let avd_candidate = classify_scan_root_user_directory_candidate(&avd)
+            .expect("avd dir should be classified");
+        let app_data_candidate = classify_scan_root_user_directory_candidate(&app_data)
+            .expect("app data dir should be classified");
+
+        assert_eq!(wallpaper_candidate.category, "Personal Media");
+        assert_eq!(notebook_candidate.category, "Developer Data");
+        assert_eq!(avd_candidate.category, "Developer Data");
+        assert_eq!(app_data_candidate.category, "App Data");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovers_scan_root_user_data_candidates_from_extra_drives() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-user-scan-{unique}"));
+        let wallpapers = root.join("Wallpapers");
+        let avd = root.join("android");
+        let notebooks = root.join("work\\research");
+        let chat_data = root.join("chat");
+        let excluded = root.join("excluded\\Wallpapers");
+        let iso = root.join("zh-cn_windows_11_business.iso");
+
+        fs::create_dir_all(&wallpapers).expect("create wallpapers dir");
+        fs::create_dir_all(&avd).expect("create avd dir");
+        fs::create_dir_all(&notebooks).expect("create notebooks dir");
+        fs::create_dir_all(chat_data.join("config")).expect("create chat config dir");
+        fs::create_dir_all(chat_data.join("nt_db")).expect("create chat db dir");
+        fs::create_dir_all(&excluded).expect("create excluded dir");
+        fs::create_dir_all(avd.join("Pixel_9.avd")).expect("create avd child dir");
+        fs::write(wallpapers.join("1.jpg"), b"jpg").expect("write image 1");
+        fs::write(notebooks.join("analysis.ipynb"), b"{}").expect("write notebook file");
+        fs::write(avd.join("config.ini"), b"[avd]").expect("write avd config");
+        fs::write(avd.join("userdata-qemu.img"), b"img").expect("write avd image");
+        fs::write(chat_data.join("config\\global_config"), b"cfg").expect("write config file");
+        fs::write(chat_data.join("config\\client_config"), b"cfg").expect("write config file 2");
+        fs::write(chat_data.join("nt_db\\group_info.db"), b"db").expect("write db file");
+        fs::write(chat_data.join("nt_db\\group_info.db-wal"), b"wal").expect("write wal file");
+        fs::write(&iso, b"iso").expect("write iso");
+
+        let candidates = discover_scan_root_user_data_candidates(
+            std::slice::from_ref(&root),
+            std::slice::from_ref(&root.join("excluded")),
+        );
+        let labels: Vec<&str> = candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect();
+        let categories: Vec<&str> = candidates
+            .iter()
+            .map(|candidate| candidate.category.as_ref())
+            .collect();
+        let paths: Vec<String> = candidates
+            .iter()
+            .map(|candidate| candidate.path.display().to_string())
+            .collect();
+
+        assert!(labels.contains(&"Wallpapers"));
+        assert!(labels.contains(&"android"));
+        assert!(labels.contains(&"research") || labels.contains(&"work"));
+        assert!(labels.contains(&"chat"));
+        assert!(labels.contains(&"zh-cn_windows_11_business.iso"));
+        assert!(categories.contains(&"Disk Images"));
+        assert!(categories.contains(&"App Data"));
+        assert!(!paths.iter().any(|path| path.contains("excluded")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn collapses_android_sdk_like_tree_into_single_parent_candidate() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("winrehome-android-sdk-{unique}"));
+        let sdk = root.join("android-sdk");
+        fs::create_dir_all(sdk.join("platforms\\android-35")).expect("create platforms");
+        fs::create_dir_all(sdk.join("skins\\pixel")).expect("create skins");
+        fs::create_dir_all(sdk.join("sources\\android-35")).expect("create sources");
+        fs::create_dir_all(sdk.join("system-images\\android-35")).expect("create system images");
+        fs::write(sdk.join("platforms\\android-35\\android.jar"), b"jar").expect("write jar");
+        fs::write(sdk.join("sources\\android-35\\source.properties"), b"props")
+            .expect("write source props");
+
+        let candidates = discover_scan_root_user_data_candidates(std::slice::from_ref(&root), &[]);
+        let labels: Vec<&str> = candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect();
+        let paths: Vec<String> = candidates
+            .iter()
+            .map(|candidate| candidate.path.display().to_string())
+            .collect();
+
+        assert!(labels.contains(&"android-sdk"));
+        assert!(!paths.iter().any(|path| path.ends_with("\\platforms")));
+        assert!(!paths.iter().any(|path| path.ends_with("\\skins")));
+        assert!(!paths.iter().any(|path| path.ends_with("\\sources")));
+        assert!(!paths.iter().any(|path| path.ends_with("\\system-images")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removes_personal_candidates_nested_under_portable_root() {
+        let roots = vec![
+            UserDataRoot {
+                category: "Personal Media".into(),
+                label: "images".into(),
+                path: PathBuf::from("C:\\die\\images"),
+                reason: "nested".into(),
+                stats: PathStats {
+                    file_count: 10,
+                    total_bytes: 1024,
+                },
+            },
+            UserDataRoot {
+                category: "App Data".into(),
+                label: "peid".into(),
+                path: PathBuf::from("C:\\die\\peid"),
+                reason: "nested".into(),
+                stats: PathStats {
+                    file_count: 2,
+                    total_bytes: 512,
+                },
+            },
+            UserDataRoot {
+                category: "Personal Files".into(),
+                label: "Documents".into(),
+                path: PathBuf::from("D:\\Documents"),
+                reason: "outside".into(),
+                stats: PathStats {
+                    file_count: 3,
+                    total_bytes: 256,
+                },
+            },
+        ];
+        let portable_candidates = vec![PortableAppCandidate {
+            display_name: "die".to_string(),
+            root_path: PathBuf::from("C:\\die"),
+            main_executable: PathBuf::from("C:\\die\\die.exe"),
+            confidence: PortableConfidence::High,
+            stats: PathStats {
+                file_count: 100,
+                total_bytes: 4096,
+            },
+            reasons: vec![],
+        }];
+
+        let filtered =
+            filter_user_data_roots_against_portable_candidates(roots, &portable_candidates);
+        let labels: Vec<&str> = filtered.iter().map(|root| root.label.as_ref()).collect();
+
+        assert_eq!(filtered.len(), 1);
+        assert!(labels.contains(&"Documents"));
+        assert!(!labels.contains(&"images"));
+        assert!(!labels.contains(&"peid"));
     }
 }

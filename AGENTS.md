@@ -12,6 +12,7 @@ These rules are intentionally written in a reusable way so they can be copied in
 - Preserve existing product copy unless the task requires rewriting it.
 - Keep user-facing docs concise and practical; avoid adding AI collaboration notes or marketing filler unless explicitly requested.
 - Keep `README.md` user-facing and promotional for external readers. Contributor rules, operational constraints, missing-work notes, AI guidance, release-process conventions, and collaboration guidance belong in `AGENTS.md`, not `README.md`.
+- Do not create repository subdirectories such as `docs/`, `notes/`, `tmp/`, or similar just to store AI handoff notes, internal architecture summaries, release drafting scratch files, or collaboration-only guidance. Put that material in `AGENTS.md` unless the user explicitly asks for a separate file or directory.
 - When updating `README.md`, follow the style of strong, high-star GitHub project READMEs: lead with clear value, polished feature framing, concise usage/integration guidance, and externally useful examples.
 - For the project's leading one-sentence summary in README or similar public-facing docs, prefer a direct product-description sentence instead of starting with the repository name or "This project is ...", unless the user explicitly asks for that phrasing.
 - In public-facing docs such as `README.md`, write commands using standard upstream tooling, not local wrappers, aliases, shell functions, or private helper commands. Keep local convenience commands in contributor-only docs such as `AGENTS.md`.
@@ -68,6 +69,15 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - User files are included by allow-list and migration heuristics, not broad directory exclusion alone.
 - Users may add explicit extra file or directory paths when default migration recommendations miss important data.
 
+### Project Architecture And Boundaries
+
+- Keep the product pipeline conceptually split into isolated stages: discovery, review/planning, archive writing, archive verification, and restore.
+- Keep archive writing transactional and verifiable before reporting success; do not optimize for speed at the expense of recoverability.
+- The current archive format target is one `.wrh` file per snapshot with a `WRH1` header, manifest footer, per-file offsets/sizes/CRC, and per-file deflate compression.
+- Restore selection remains driven by manifest root prefixes and explicit user selection, not hidden per-file UI state.
+- Treat the following as intentionally out of scope unless the user explicitly asks for them: full-disk “smart” migration, block-level deduplication, shadow-copy handling for locked files, and silent in-place merge/overwrite restore modes.
+- The desktop UI is intentionally native Rust `eframe/egui`: keep the single-binary, no-WebView2-runtime direction unless the user explicitly requests a platform change.
+
 ### Important Files
 
 - `src/main.rs`: desktop app entry point
@@ -76,7 +86,6 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - `src/plan.rs`: scan, classification, exclusion, and preview logic
 - `src/archive.rs`: `.wrh` archive writing, manifest reading, and restore logic
 - `src/config.rs`: persisted app configuration and saved selections
-- `docs/architecture.md`: architecture and reliability notes
 - `.github/workflows/cd.yaml`: GitHub Release build and asset upload workflow
 - `.github/ISSUE_TEMPLATE/`: issue intake templates
 - `SECURITY.md`: security reporting and support policy
@@ -105,7 +114,6 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - Portable-app detection must stay explainable. Favor confidence scoring and user review over opaque “smart” guesses.
 - Default exclusions must cover cache, temp, logs, and build artifacts unless there is a documented restore value.
 - User-added custom include paths should remain explicit, reviewable, and path-based; do not silently broaden them into heuristic whole-app captures.
-- When classification behavior changes, update both the implementation and `docs/architecture.md`.
 
 ### Restore Safety Rules
 
@@ -120,7 +128,6 @@ This repository is `WinRehome`, a Windows-only migration backup desktop applicat
 - Empty explicit restore-root selection means restore nothing; only the plain full-restore entrypoint should restore all manifest roots by default.
 - Skip-existing restore behavior must remain opt-in and must report how many files were skipped.
 - Restore must reject archive entry paths that attempt to escape the chosen destination root.
-- If archive format behavior changes, document compatibility expectations in `docs/architecture.md`.
 
 ### Repository Release Conventions
 

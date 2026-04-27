@@ -1084,11 +1084,7 @@ impl eframe::App for WinRehomeApp {
                                                     egui::ScrollArea::vertical()
                                                         .auto_shrink([false, false])
                                                         .show(ui, |ui| {
-                                                            for item in preview
-                                                                .portable_candidates
-                                                                .iter()
-                                                                .take(60)
-                                                            {
+                                                            for item in &preview.portable_candidates {
                                                                 let root_path = item
                                                                     .root_path
                                                                     .display()
@@ -1973,12 +1969,7 @@ impl eframe::App for WinRehomeApp {
                                                             },
                                                         );
                                                         ui.add_space(8.0);
-                                                        for app in loaded
-                                                            .manifest
-                                                            .installed_apps
-                                                            .iter()
-                                                            .take(160)
-                                                        {
+                                                        for app in &loaded.manifest.installed_apps {
                                                             if !matches_filter(
                                                                 &self.restore_inventory_filter,
                                                                 &[
@@ -2126,12 +2117,7 @@ impl eframe::App for WinRehomeApp {
                                                         },
                                                     );
                                                     ui.add_space(8.0);
-                                                    for app in loaded
-                                                        .manifest
-                                                        .installed_apps
-                                                        .iter()
-                                                        .take(160)
-                                                    {
+                                                    for app in &loaded.manifest.installed_apps {
                                                         if !matches_filter(
                                                             &self.restore_inventory_filter,
                                                             &[
@@ -3784,7 +3770,7 @@ fn render_scan_installed_apps_panel(
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            for app in preview.installed_apps.iter().take(120) {
+                            for app in &preview.installed_apps {
                                 let install_location = app
                                     .install_location
                                     .as_ref()

@@ -2260,7 +2260,4 @@ mod tests {
 
         let _ = fs::remove_file(file);
     }
-
-    #[allow(dead_code)]
-    fn _assert_manifest_send_sync(_: &ArchiveManifest) {}
 }
